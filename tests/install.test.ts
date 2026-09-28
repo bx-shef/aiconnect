@@ -1,19 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { absoluteHandler, eventBindCalls, missingScopes, placementBindCall, staleEventHandlers, stalePlacements } from '~/utils/install'
-import { invoiceIdFromOptions, invoiceIdFromQuery } from '~/utils/placement'
+import { absoluteHandler, eventBindCalls, missingScopes, staleEventHandlers } from '~/utils/install'
 
-const SITE = 'https://invoice.example.com'
+const SITE = 'https://aiconnect.example.com'
 
 describe('адреса обработчиков', () => {
   it('только абсолютный https', () => {
-    expect(absoluteHandler(SITE, '/invoice')).toBe('https://invoice.example.com/invoice')
-    expect(absoluteHandler('http://invoice.example.com', '/invoice')).toBeNull()
-    expect(absoluteHandler('', '/invoice')).toBeNull()
-  })
-
-  it('без адреса приложения встройку не регистрируем', () => {
-    expect(placementBindCall('')).toBeNull()
-    expect(placementBindCall(SITE)?.params).toMatchObject({ PLACEMENT: 'CRM_SMART_INVOICE_DETAIL_TOOLBAR', HANDLER: `${SITE}/invoice` })
+    expect(absoluteHandler(SITE, '/api/b24/events')).toBe('https://aiconnect.example.com/api/b24/events')
+    expect(absoluteHandler('http://aiconnect.example.com', '/api/b24/events')).toBeNull()
+    expect(absoluteHandler('', '/api/b24/events')).toBeNull()
   })
 })
 
@@ -21,6 +15,10 @@ describe('подписки на события', () => {
   it('подписывает только недостающие', () => {
     const existing = [{ event: 'onappinstall', handler: `${SITE}/api/b24/events` }]
     expect(eventBindCalls(SITE, existing).map(c => c.params.event)).toEqual(['ONAPPUNINSTALL'])
+  })
+
+  it('без адреса приложения не подписывает ничего', () => {
+    expect(eventBindCalls('', [])).toEqual([])
   })
 
   it('подписка на чужой адрес не считается', () => {
@@ -41,35 +39,10 @@ describe('подписки на события', () => {
   })
 })
 
-describe('права и повторная установка', () => {
-  it('показывает недостающие права', () => {
-    expect(missingScopes(['crm', 'task', 'placement'])).toEqual(['catalog', 'user_brief'])
-    expect(missingScopes(null)).toHaveLength(5)
-  })
-
-  it('переустановка не регистрирует второй пункт меню', () => {
-    const existing = [{ placement: 'CRM_SMART_INVOICE_DETAIL_TOOLBAR', handler: `${SITE}/invoice` }]
-    expect(placementBindCall(SITE, existing)).toBeNull()
-  })
-
-  it('встройку со старым адресом снимаем, новую регистрируем', () => {
-    const existing = [{ placement: 'CRM_SMART_INVOICE_DETAIL_TOOLBAR', handler: 'https://old.example.com/invoice' }]
-    expect(stalePlacements(SITE, existing)).toEqual([{ PLACEMENT: 'CRM_SMART_INVOICE_DETAIL_TOOLBAR', HANDLER: 'https://old.example.com/invoice' }])
-    expect(placementBindCall(SITE, existing)).not.toBeNull()
-  })
-})
-
-describe('контекст встройки', () => {
-  it('у нового счёта ID приходит в ENTITY_ID', () => {
-    expect(invoiceIdFromOptions({ ENTITY_ID: '42', URI: '/crm/type/31/details/42/' })).toBe(42)
-    expect(invoiceIdFromOptions({ entity_id: 7 })).toBe(7)
-    expect(invoiceIdFromOptions({ URI: '/x' })).toBeNull()
-    expect(invoiceIdFromOptions(undefined)).toBeNull()
-  })
-
-  it('ID из строки запроса', () => {
-    expect(invoiceIdFromQuery('12')).toBe(12)
-    expect(invoiceIdFromQuery(['5', '6'])).toBe(5)
-    expect(invoiceIdFromQuery('abc')).toBeNull()
+describe('права приложения', () => {
+  it('нужны ровно ai_admin и user_brief', () => {
+    expect(missingScopes(null)).toEqual(['ai_admin', 'user_brief'])
+    expect(missingScopes(['user_brief'])).toEqual(['ai_admin'])
+    expect(missingScopes(['ai_admin', 'user_brief', 'crm'])).toEqual([])
   })
 })

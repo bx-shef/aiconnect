@@ -1,14 +1,13 @@
 <script setup lang="ts">
-// Установка приложения в портал. Порядок — как в эталоне client-bank-alfa-by:
-// проверить права → встройка → подписка на события → installFinish.
-// ⚠ event.bind ДО installFinish: иначе ONAPPINSTALL (токены для записи ставок) не придёт.
-// ⚠ Встройка не видна в интерфейсе, пока установка не завершена (документация встройки).
+// Установка приложения в портал: проверить права → подписка на события → installFinish.
+// ⚠ event.bind ДО installFinish: иначе ONAPPINSTALL (токены установки) не придёт.
 // ⚠ После installFinish портал перезагружает страницу — показывать что-то после него бесполезно
 //   (подсказка с кодом приложения поэтому живёт на главной, pages/app.vue).
-// Страницу можно открыть и после установки (смена адреса сервера): тогда встройка и подписки
-// обновляются, а installFinish не вызывается — вне режима установки SDK на нём падает.
+// Страницу можно открыть и после установки (смена адреса сервера): тогда подписки обновляются,
+// а installFinish не вызывается — вне режима установки SDK на нём падает.
+// Провайдеры BitrixGPT (`ai.engine.register`) здесь не регистрируются — это этапы 1–3 docs/PLAN.md.
 
-import { eventBindCalls, missingScopes, placementBindCall, staleEventHandlers, stalePlacements } from '~/utils/install'
+import { eventBindCalls, missingScopes, staleEventHandlers } from '~/utils/install'
 
 type StepState = 'wait' | 'run' | 'ok' | 'warn' | 'fail'
 interface Step {
@@ -22,7 +21,6 @@ const b24 = useB24()
 const config = useRuntimeConfig()
 const steps = ref<Step[]>([
   { key: 'scope', label: 'Проверка прав приложения', state: 'wait' },
-  { key: 'placement', label: 'Пункт «Заполнить из задач» в карточке счёта', state: 'wait' },
   { key: 'events', label: 'Подписка на события установки и удаления', state: 'wait' },
   { key: 'finish', label: 'Завершение установки', state: 'wait' }
 ])
@@ -46,16 +44,7 @@ async function runInstall() {
   mark('scope', missing.length ? 'warn' : 'ok', missing.length ? `Не выданы права: ${missing.join(', ')} — добавьте их в карточке приложения` : undefined)
 
   // Сначала — новое, потом снимаем старое: если регистрация упадёт, у приложения останется хотя
-  // бы прежний пункт меню и прежняя подписка на удаление (находка /code-review).
-  mark('placement', 'run')
-  const placements = await b24.call<unknown[]>('placement.get')
-  const bind = placementBindCall(siteUrl, placements)
-  if (bind) await b24.call(bind.method, bind.params)
-  for (const stale of stalePlacements(siteUrl, placements)) {
-    await b24.call('placement.unbind', stale).catch(() => undefined)
-  }
-  mark('placement', 'ok', bind ? undefined : 'уже был зарегистрирован')
-
+  // бы прежняя подписка на удаление.
   mark('events', 'run')
   const existing = await b24.call<unknown[]>('event.get')
   for (const ev of eventBindCalls(siteUrl, existing)) await b24.call(ev.method, ev.params)
@@ -69,7 +58,7 @@ async function runInstall() {
     await frame.installFinish()
     mark('finish', 'ok')
   } else {
-    mark('finish', 'ok', 'приложение уже было установлено — встройка и подписки обновлены')
+    mark('finish', 'ok', 'приложение уже было установлено — подписки обновлены')
   }
   done.value = true
 }
@@ -94,7 +83,7 @@ const icon: Record<StepState, string> = { wait: '○', run: '…', ok: '✓', wa
       <B24Card>
         <template #header>
           <h1 class="text-lg font-semibold">
-            Установка «Счёт из задач»
+            Установка aiconnect
           </h1>
         </template>
         <ol class="space-y-2">
@@ -128,7 +117,7 @@ const icon: Record<StepState, string> = { wait: '○', run: '…', ok: '✓', wa
         v-if="done"
         color="air-primary-success"
         title="Готово"
-        description="Администратор настраивает валюту и ставки в разделе приложения «Настройки». Затем в карточке счёта: верхняя кнопка → «Заполнить из задач»."
+        description="Приложение установлено. Подключение своей модели к BitrixGPT появится в следующих версиях."
       />
     </div>
   </InPortalGate>

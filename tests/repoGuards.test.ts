@@ -114,8 +114,8 @@ describe('выкат (docs/DEPLOY.md): main → GHCR → Watchtower → nginx-pr
 
 describe('шаблоны Vue', () => {
   // Nuxt называет компоненты из подкаталогов с приставкой каталога (components/invoice/FillPreview.vue →
-  // InvoiceFillPreview). Незнакомый тег Vue рисует пустым элементом без ошибки — так предпросмотр
-  // счёта не показывался вовсе (живой прогон 2026-09-25).
+  // InvoiceFillPreview). Незнакомый тег Vue рисует пустым элементом без ошибки — так в шаблоне
+  // invoice-from-tasks предпросмотр счёта не показывался вовсе (живой прогон 2026-09-25).
   it('незнакомый компонент в шаблоне — ошибка typecheck', () => {
     // tsconfig.json — JSONC: убираем комментарии-строки и смотрим настройку там, где её читает vue-tsc.
     const text = readFileSync(join(ROOT, 'tsconfig.json'), 'utf8').replace(/^\s*\/\/.*$/gm, '')
@@ -134,8 +134,8 @@ describe('шаблоны Vue', () => {
     expect(existsSync(dts), 'нет .nuxt/components.d.ts — запустите pnpm install (nuxt prepare)').toBe(true)
     const registered = new Set([...readFileSync(dts, 'utf8').matchAll(/^export const (\w+):/gm)].map(m => m[1]))
     for (const builtin of ['Component', 'KeepAlive', 'Suspense', 'Teleport', 'Transition', 'TransitionGroup']) registered.add(builtin)
-    expect(registered.has('InvoiceFillPreview')).toBe(true)
-    expect(registered.has('InvoiceConsultAnswer')).toBe(true)
+    // Проверка, что список вообще прочитан: иначе пустой набор «зарегистрированных» пропустил бы всё.
+    expect(registered.has('InPortalGate')).toBe(true)
     const pascal = (tag: string) => tag.includes('-') ? tag.split('-').map(p => p.charAt(0).toUpperCase() + p.slice(1)).join('') : tag
     const unknown: string[] = []
     for (const file of sources(join(ROOT, 'app')).filter(f => f.endsWith('.vue'))) {
@@ -155,6 +155,8 @@ describe('шаблоны Vue', () => {
 /** Все .ts/.vue файлы каталога рекурсивно. */
 function sources(dir: string): string[] {
   const out: string[] = []
+  // shared/ пуст после этапа 0 (git не хранит пустые каталоги), но вернётся — не падаем без него.
+  if (!existsSync(dir)) return out
   for (const name of readdirSync(dir)) {
     const path = join(dir, name)
     if (statSync(path).isDirectory()) out.push(...sources(path))
@@ -182,7 +184,8 @@ describe('реестр REST-методов (docs/REST_METHODS.md)', () => {
         if (!used.has(m[1]!)) used.set(m[1]!, relative(ROOT, file))
       }
     }
-    expect(used.size).toBeGreaterThan(10)
+    // Порог — чтобы поломка поиска (пустой результат) не выдавала себя за «всё в реестре».
+    expect(used.size).toBeGreaterThanOrEqual(6)
     const missing = [...used].filter(([method]) => !registry.includes(`\`${method}\``)).map(([m, f]) => `${m} (${f})`)
     expect(missing, `Нет в docs/REST_METHODS.md:\n${missing.join('\n')}`).toEqual([])
   })

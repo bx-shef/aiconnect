@@ -23,16 +23,13 @@ describe('smoke: чтение файла окружения', () => {
   })
 
   it('нет вебхука — null (смок пропускается); не https — ошибка без адреса в тексте', () => {
-    expect(parseSmokeEnv('VIBE_API_KEY=x')).toBeNull()
+    expect(parseSmokeEnv('OTHER=x')).toBeNull()
     expect(() => parseSmokeEnv('B24_HOOK=http://p.bitrix24.by/rest/1/secret/')).toThrow(/не https/)
     expect(() => parseSmokeEnv('B24_HOOK=http://p.bitrix24.by/rest/1/secret/')).not.toThrow(/secret/)
   })
 
-  it('ключ BitrixGPT: только из файла (BITRIXGPT_API_KEY, затем VIBE_API_KEY); хост — в нижнем регистре', () => {
-    const env = parseSmokeEnv('B24_HOOK=https://P.Bitrix24.by/rest/1/x/\nVIBE_API_KEY=vibe_file')
-    expect(env).toEqual({ hook: 'https://P.Bitrix24.by/rest/1/x/', host: 'p.bitrix24.by', aiKey: 'vibe_file' })
-    expect(parseSmokeEnv('B24_HOOK=https://p.bitrix24.by/rest/1/x/\nVIBE_API_KEY=v\nBITRIXGPT_API_KEY=b')?.aiKey).toBe('b')
-    expect(parseSmokeEnv('B24_HOOK=https://p.bitrix24.by/rest/1/x/')?.aiKey).toBe('')
+  it('хост — в нижнем регистре, адрес вебхука — как есть', () => {
+    expect(parseSmokeEnv('B24_HOOK=https://P.Bitrix24.by/rest/1/x/')).toEqual({ hook: 'https://P.Bitrix24.by/rest/1/x/', host: 'p.bitrix24.by' })
   })
 })
 

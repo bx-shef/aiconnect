@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { AI_LIMITS, CONSULT_WEIGHT, SlidingWindow } from '../../server/utils/rateLimit'
+import { SlidingWindow } from '../../server/utils/rateLimit'
 
 describe('SlidingWindow', () => {
   it('отказ по одному окну не засчитывается в другом (лимит портала не съедает лимит сотрудника)', () => {
@@ -68,12 +68,5 @@ describe('SlidingWindow', () => {
     // Самый свежий ключ помнит, что лимит исчерпан; самый старый вытеснен и начинает заново.
     expect(w.take([['k10', once]], 20)).toBe(false)
     expect(w.take([['k0', once]], 21)).toBe(true)
-  })
-
-  it('пределы BitrixGPT: большой счёт называется целиком, консультация весит пакет', () => {
-    // 800 строк (32 пакета по 25) укладываются в лимиты сотрудника с запасом на пересборку.
-    expect(AI_LIMITS.userRows.max).toBeGreaterThanOrEqual(800 * 2)
-    expect(AI_LIMITS.userRequests.max).toBeGreaterThanOrEqual(32 * 2)
-    expect(CONSULT_WEIGHT).toBe(25)
   })
 })

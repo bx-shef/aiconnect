@@ -9,7 +9,7 @@ describe('bodyLimitFor', () => {
 
   it('страницы и GET не ограничиваем (портал POST-ит на страницы приложения)', () => {
     expect(bodyLimitFor('GET', '/api/rates')).toBeNull()
-    expect(bodyLimitFor('POST', '/invoice')).toBeNull()
+    expect(bodyLimitFor('POST', '/install')).toBeNull()
     expect(bodyLimitFor('POST', '/apiary')).toBeNull()
   })
 })

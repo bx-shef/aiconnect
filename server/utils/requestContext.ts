@@ -3,13 +3,11 @@
 // отдельно от чистых модулей, которые покрыты юнит-тестами.
 
 import type { H3Event } from 'h3'
-import { AiGatewayError } from './aiGateway'
-import { makeFrameCall, makePortalCall, oauthCredsFromEnv, type RestCall } from './b24Client'
+import { makeFrameCall, oauthCredsFromEnv, type RestCall } from './b24Client'
 import { extractFrameAuth, verifyFrame, type FrameUser } from './frameAuth'
-import { makeInstallerCall } from './installerCall'
 import { SlidingWindow } from './rateLimit'
 import { FRAME_CHECKS_PER_IP, ipBucketKey, pickClientIp } from './requestLimits'
-import { accessTokenOf, refreshTokenOf, updateTokens, type KeyValue } from './tokenStore'
+import type { KeyValue } from './tokenStore'
 
 const frameCheckWindows = new SlidingWindow()
 
@@ -29,7 +27,11 @@ export interface RequestContext {
   frameCall: RestCall
 }
 
-/** Проверяет фрейм-токен запроса. Бросает h3-ошибку с кодом, если пустить нельзя. */
+/**
+ * Проверяет фрейм-токен запроса. Бросает h3-ошибку с кодом, если пустить нельзя.
+ * Сейчас его не зовёт ни один обработчик: страницы этапа 0 к нашему /api с токеном не ходят.
+ * Оставлен вместе с frameAuth как инфраструктура настроек (этап 3 docs/PLAN.md).
+ */
 export async function requireFrameUser(event: H3Event): Promise<RequestContext> {
   const headers = getRequestHeaders(event)
   const auth = extractFrameAuth({ get: name => headers[name] })
@@ -45,37 +47,4 @@ export async function requireFrameUser(event: H3Event): Promise<RequestContext> 
   })
   if (!verdict.ok) throw createError({ statusCode: verdict.status, statusMessage: verdict.error })
   return { user: verdict.user, frameCall: makeFrameCall(auth.domain, auth.accessToken, creds) }
-}
-
-/**
- * REST от имени администратора-установщика (сохранённый токен). Нужен только там, где права
- * пользователя недостаточны по документации, — сейчас это запись ставок не-администратором.
- * Запись о портале читается заново на каждый вызов (`installerCall.ts`): в `FrameUser.portal` — копия
- * из минутного кэша проверки фрейма, после рефреша в ней старые токены.
- */
-export function installerCall(user: FrameUser): RestCall {
-  const kv = portalStore()
-  const creds = oauthCredsFromEnv()
-  return makeInstallerCall({
-    kv,
-    memberId: user.portal.memberId,
-    clientFor: p => makePortalCall(
-      {
-        domain: p.domain,
-        memberId: p.memberId,
-        accessToken: accessTokenOf(p),
-        refreshToken: refreshTokenOf(p),
-        expiresAt: p.expiresAt,
-        applicationToken: p.applicationToken,
-        oauthHost: p.oauthHost
-      },
-      creds,
-      tokens => updateTokens(kv, p.memberId, tokens)
-    )
-  })
-}
-
-/** Переводит отказ AI-шлюза в HTTP-ошибку h3; прочие ошибки пробрасывает как есть. */
-export function aiHttpError(e: unknown): unknown {
-  return e instanceof AiGatewayError ? createError({ statusCode: e.statusCode, statusMessage: e.message }) : e
 }

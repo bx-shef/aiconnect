@@ -116,9 +116,9 @@ health:
 #   make doctor PROXY=<имя>   # если прокси не нашёлся или их несколько
 #
 # Как в эталоне client-bank (make doctor): одна команда вместо ручного обхода. Каждая строка — ✓,
-# ✗ (после «→» — что делать; есть ✗ — make завершится с ошибкой) или ⚠ (необязательное не задано
-# или проверить нечем — не ошибка, но и не «всё в порядке»). Что проверяет, кроме контейнера:
-# - /api/health изнутри: сборка и что не задано — в .env, в compose-файле или необязательное;
+# ✗ (после «→» — что делать; есть ✗ — make завершится с ошибкой) или ⚠ (проверить нечем — не
+# ошибка, но и не «всё в порядке»). Что проверяет, кроме контейнера:
+# - /api/health изнутри: сборка и что не задано — в .env или в compose-файле;
 # - прокси ходит в приложение без keepalive — иначе 502 на POST из портала (метка в compose) — и
 #   видит хотя бы один рабочий сервер приложения;
 # - таймаут прокси для домена подключён (make proxy-timeout);
@@ -137,13 +137,12 @@ doctor:
 	  "") fail "контейнера $(APP_CONTAINER) нет → make prod-up"; echo "[make] проблем: 1"; exit 1;; \
 	  *) fail "контейнер $(APP_CONTAINER): $$s → make logs";; \
 	esac; \
-	h=$$(docker exec $(APP_CONTAINER) node -e "const env = { oauth: 'B24_CLIENT_ID/B24_CLIENT_SECRET', tokenKey: 'B24_TOKEN_ENC_KEY', appCode: 'B24_APP_CODE' }; const compose = { siteUrl: 'NUXT_PUBLIC_SITE_URL', trustProxy: 'TRUST_PROXY' }; const optional = { bitrixGpt: 'VIBE_API_KEY/BITRIXGPT_API_KEY' }; fetch('http://127.0.0.1:3000/api/health').then(r => r.json()).then(j => { const c = j.config || {}; const off = Object.keys(c).filter(k => c[k] !== true); const list = pick => off.filter(pick).map(k => env[k] || compose[k] || optional[k] || k).join(',') || '-'; console.log([String(j.commit || 'неизвестна').replace(/\s/g, ''), list(k => !(k in compose) && !(k in optional)), list(k => k in compose), list(k => k in optional)].join(' ')) }).catch(() => process.exit(1))" 2>/dev/null); \
+	h=$$(docker exec $(APP_CONTAINER) node -e "const env = { oauth: 'B24_CLIENT_ID/B24_CLIENT_SECRET', tokenKey: 'B24_TOKEN_ENC_KEY', appCode: 'B24_APP_CODE' }; const compose = { siteUrl: 'NUXT_PUBLIC_SITE_URL', trustProxy: 'TRUST_PROXY' }; fetch('http://127.0.0.1:3000/api/health').then(r => r.json()).then(j => { const c = j.config || {}; const off = Object.keys(c).filter(k => c[k] !== true); const list = pick => off.filter(pick).map(k => env[k] || compose[k] || k).join(',') || '-'; console.log([String(j.commit || 'неизвестна').replace(/\s/g, ''), list(k => !(k in compose)), list(k => k in compose)].join(' ')) }).catch(() => process.exit(1))" 2>/dev/null); \
 	if [ -z "$$h" ]; then fail "GET /api/health изнутри контейнера не ответил → make logs"; else \
 	  set -- $$h; \
 	  if [ "$$2" = - ] && [ "$$3" = - ]; then ok "настройки сервера заданы, сборка $$1"; fi; \
 	  [ "$$2" = - ] || fail "не задано в .env: $$2 → вписать и make prod-up (таблица переменных — docs/DEPLOY.md); сборка $$1"; \
 	  [ "$$3" = - ] || fail "не задано в docker-compose.prod.yml: $$3 → make compose-update, затем make prod-up"; \
-	  [ "$$4" = - ] || warn "не задано (необязательно): $$4 — без него не работают названия через BitrixGPT и консультации"; \
 	fi; \
 	[ "$$(docker inspect -f '{{index .Config.Labels "com.github.nginx-proxy.nginx-proxy.keepalive"}}' $(APP_CONTAINER) 2>/dev/null)" = disabled ] \
 	  && ok "у контейнера метка keepalive=disabled" \
@@ -159,7 +158,7 @@ doctor:
 	    f="/etc/nginx/vhost.d/$${d}_location"; \
 	    t=$$(docker exec "$$p" cat "$$f" 2>/dev/null | sed -n 's/^[[:space:]]*proxy_read_timeout[[:space:]]*\([^;]*\);.*/\1/p' | tail -n 1); \
 	    if [ -n "$$t" ] && printf '%s\n' "$$conf" | grep -qF "include $$f;"; then ok "таймаут прокси для $$d: $$t"; \
-	    else fail "таймаут прокси для $$d не подключён — 60 с мало для BitrixGPT → make proxy-timeout"; fi; \
+	    else fail "таймаут прокси для $$d не подключён → make proxy-timeout"; fi; \
 	  fi; \
 	  if ! command -v curl >/dev/null 2>&1; then warn "https не проверен: на сервере нет curl (sudo apt install curl)"; else \
 	    r=$$(curl -fsS --max-time 10 "https://$$d/api/health" 2>&1); \
@@ -195,11 +194,15 @@ backup:
 	  && { $(COMPOSE) exec -T app tar czf - -C /app/.data . > "$$f" || { rm -f "$$f"; exit 1; }; } \
 	  && echo "[make] копия: $$f ($$(du -h "$$f" | cut -f1))"
 
-## Поднять таймаут общего nginx-proxy для нашего домена (по умолчанию он ждёт 60 с — мало для BitrixGPT)
+## Поднять таймаут общего nginx-proxy для нашего домена (по умолчанию он ждёт 60 с)
 #
 #   make proxy-timeout                      # прокси найдётся по образу *nginx-proxy* (не acme/companion)
 #   make proxy-timeout PROXY=<имя>          # если прокси не нашёлся или их несколько
-#   make proxy-timeout PROXY_TIMEOUT=600s   # другой таймаут (по умолчанию 400s: BitrixGPT — до 120 с × 3)
+#   make proxy-timeout PROXY_TIMEOUT=600s   # другой таймаут (по умолчанию 400s)
+#
+# Унаследовано от шаблона, где модель отвечала синхронно. Протокол ai.engine асинхронный (202 за
+# 5 с, ответ — отдельным POST на callbackUrl, docs/RESEARCH.md), так что долгий таймаут, вероятно,
+# не понадобится; решится на этапе 2 docs/PLAN.md.
 #
 # nginx-proxy подключает /etc/nginx/vhost.d/<домен>_location в блок location нашего домена, когда
 # перестраивает конфиг. Цель:

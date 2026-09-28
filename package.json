@@ -31,7 +31,6 @@
     "@vueuse/core": "^14.4.0",
     "@vueuse/nuxt": "^14.4.0",
     "nuxt": "^4.5.2",
-    "openai": "^7.3.0",
     "tailwindcss": "^4.3.3"
   },
   "devDependencies": {

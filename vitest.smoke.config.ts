@@ -1,7 +1,7 @@
 import { defineConfig } from 'vitest/config'
 import { fileURLToPath } from 'node:url'
 
-// Смок-набор на ТЕСТОВОМ портале (docs/SMOKE.md): пишет в портал, ходит в BitrixGPT — поэтому
+// Смок-набор на ТЕСТОВОМ портале (docs/SMOKE.md): ходит в живой портал — поэтому
 // отдельный конфиг, не часть `pnpm test` и CI. Алиасы — как в vitest.config.ts.
 export default defineConfig({
   resolve: {

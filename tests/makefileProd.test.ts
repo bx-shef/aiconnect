@@ -119,7 +119,7 @@ const input = fs.readFileSync(0, 'utf8')
 if (a[0] === 's_client') {
   // Недоверенный сертификат (самоподписанный заглушки nginx-proxy): с проверкой цепочки и имени
   // рукопожатие обрывается, без неё — сертификат читается, как у настоящего openssl.
-  const strict = a.includes('-verify_return_error') && a[a.indexOf('-verify_hostname') + 1] === 'invoice.example.by'
+  const strict = a.includes('-verify_return_error') && a[a.indexOf('-verify_hostname') + 1] === 'aiconnect.example.by'
   if (env.FAKE_CERT_UNTRUSTED === '1' && strict) process.exit(1)
   process.stdout.write(env.FAKE_CERT ?? '-----BEGIN CERTIFICATE-----\\n')
   process.exit(0)
@@ -137,7 +137,7 @@ echo "/dev/sda1 100 50 50 \${FAKE_DF_USED:-42}% /"
 // Рядом с прокси — companion обоих поколений: старый образ тоже содержит «nginx-proxy» в имени.
 const ONE_PROXY = 'nginx-proxy nginxproxy/nginx-proxy:1.7\\nnginx-proxy-acme nginxproxy/acme-companion:2.5\\nletsencrypt jrcs/letsencrypt-nginx-proxy-companion:latest\\naiconnect ghcr.io/bx-shef/aiconnect:latest\\n'
 const VHOST_DIR = '/etc/nginx/vhost.d'
-const FILE = `${VHOST_DIR}/invoice.example.by_location`
+const FILE = `${VHOST_DIR}/aiconnect.example.by_location`
 
 const dirs: string[] = []
 afterEach(() => {
@@ -209,7 +209,7 @@ function make(target: string, opts: MakeOpts = {}): Run {
     DOCKER_LOG: log,
     FAKE_ROOT: root,
     FAKE_PS: ONE_PROXY,
-    FAKE_VHOST: 'invoice.example.by',
+    FAKE_VHOST: 'aiconnect.example.by',
     ...opts.env
   }
   const res = spawnSync('make', ['--no-print-directory', target, ...(opts.args ?? [])], { cwd: dir, env, encoding: 'utf8' })
@@ -224,7 +224,7 @@ describe('make proxy-timeout', () => {
   it('домен — из VIRTUAL_HOST контейнера; пишет таймаут, перестраивает конфиг в прокси, приложение не трогает', () => {
     const r = proxyTimeout()
     expect(r.code, r.out).toBe(0)
-    expect(r.out).toContain('прокси: nginx-proxy, домен: invoice.example.by, таймаут: 400s')
+    expect(r.out).toContain('прокси: nginx-proxy, домен: aiconnect.example.by, таймаут: 400s')
     expect(vhostFile(r)).toBe('proxy_read_timeout 400s;\n')
     expect(r.calls).toEqual(expect.arrayContaining([
       'exec nginx-proxy docker-gen /app/nginx.tmpl /etc/nginx/conf.d/default.conf',
@@ -245,7 +245,7 @@ describe('make proxy-timeout', () => {
   })
 
   it('другие директивы в файле сохраняются, старый таймаут заменяется', () => {
-    const r = proxyTimeout({ files: { 'invoice.example.by_location': 'client_max_body_size 50m;\nproxy_read_timeout 60s;\n' } })
+    const r = proxyTimeout({ files: { 'aiconnect.example.by_location': 'client_max_body_size 50m;\nproxy_read_timeout 60s;\n' } })
     expect(r.code, r.out).toBe(0)
     expect(vhostFile(r)).toBe('client_max_body_size 50m;\nproxy_read_timeout 400s;\n')
   })
@@ -258,7 +258,7 @@ describe('make proxy-timeout', () => {
 
   it('уже настроено — ничего не пишет и не перестраивает, только мягкий reload', () => {
     const r = proxyTimeout({
-      files: { 'invoice.example.by_location': 'proxy_read_timeout 400s;\n' },
+      files: { 'aiconnect.example.by_location': 'proxy_read_timeout 400s;\n' },
       conf: `include ${FILE};\n`
     })
     expect(r.code, r.out).toBe(0)
@@ -272,7 +272,7 @@ describe('make proxy-timeout', () => {
     expect(first.code).not.toBe(0)
     expect(first.out).toContain('повторите make proxy-timeout')
     const again = proxyTimeout({
-      files: { 'invoice.example.by_location': 'proxy_read_timeout 400s;\n' },
+      files: { 'aiconnect.example.by_location': 'proxy_read_timeout 400s;\n' },
       conf: `include ${FILE};\n`,
       env: { FAKE_RELOAD: '1' }
     })
@@ -281,8 +281,8 @@ describe('make proxy-timeout', () => {
 
   it('наш файл есть, но в конфиге подключён только соседний хост — перестраивает, а не «уже настроено»', () => {
     const r = proxyTimeout({
-      files: { 'invoice.example.by_location': 'proxy_read_timeout 400s;\n', 'invoicexexample.by_location': 'gzip on;\n' },
-      conf: 'include /etc/nginx/vhost.d/invoicexexample.by_location;\n'
+      files: { 'aiconnect.example.by_location': 'proxy_read_timeout 400s;\n', 'aiconnectxexample.by_location': 'gzip on;\n' },
+      conf: 'include /etc/nginx/vhost.d/aiconnectxexample.by_location;\n'
     })
     expect(r.code, r.out).toBe(0)
     expect(r.out).not.toContain('уже настроено')
@@ -291,7 +291,7 @@ describe('make proxy-timeout', () => {
 
   it('таймаут в файле только в комментарии — это не «уже настроено»', () => {
     const r = proxyTimeout({
-      files: { 'invoice.example.by_location': '#proxy_read_timeout 400s;\n' },
+      files: { 'aiconnect.example.by_location': '#proxy_read_timeout 400s;\n' },
       conf: `include ${FILE};\n`
     })
     expect(r.code, r.out).toBe(0)
@@ -309,7 +309,7 @@ describe('make proxy-timeout', () => {
   it('для домена есть _location_override — файл не подключён: ошибка, а не «готово»', () => {
     // Соседний хост, отличающийся от нашего одной буквой на месте точки: подстрока или регулярное
     // выражение вместо точной строки include приняли бы его include за наш.
-    const r = proxyTimeout({ files: { 'invoice.example.by_location_override': 'return 503;\n', 'invoicexexample.by_location': 'gzip on;\n' } })
+    const r = proxyTimeout({ files: { 'aiconnect.example.by_location_override': 'return 503;\n', 'aiconnectxexample.by_location': 'gzip on;\n' } })
     expect(r.code).not.toBe(0)
     expect(r.out).toContain('не подключён')
   })
@@ -340,7 +340,7 @@ describe('make proxy-timeout', () => {
   it('после pull нового образа docker ps показывает ID вместо имени — прокси всё равно находится (образ из inspect)', () => {
     const r = proxyTimeout({ env: { FAKE_PS_IMAGE_IDS: '1' } })
     expect(r.code, r.out).toBe(0)
-    expect(r.out).toContain('прокси: nginx-proxy, домен: invoice.example.by')
+    expect(r.out).toContain('прокси: nginx-proxy, домен: aiconnect.example.by')
   })
 
   it('PROXY=<опечатка> — контейнера нет или он не запущен: так и говорит, ничего не делает', () => {
@@ -355,13 +355,13 @@ describe('make proxy-timeout', () => {
   it('прокси — только образ с именем ровно nginx-proxy: соседский nginx-proxy-dashboard не в счёт', () => {
     const r = proxyTimeout({ env: { FAKE_PS: `dash someone/nginx-proxy-dashboard:1\\n${ONE_PROXY}` } })
     expect(r.code, r.out).toBe(0)
-    expect(r.out).toContain('прокси: nginx-proxy, домен: invoice.example.by')
+    expect(r.out).toContain('прокси: nginx-proxy, домен: aiconnect.example.by')
   })
 
   it('PROXY=<имя> и PROXY_TIMEOUT=… из командной строки — берутся', () => {
     const r = proxyTimeout({ args: ['PROXY=edge-proxy', 'PROXY_TIMEOUT=600s'], env: { FAKE_PS: '' } })
     expect(r.code, r.out).toBe(0)
-    expect(r.out).toContain('прокси: edge-proxy, домен: invoice.example.by, таймаут: 600s')
+    expect(r.out).toContain('прокси: edge-proxy, домен: aiconnect.example.by, таймаут: 600s')
   })
 
   it('контейнер приложения не подменить ни командной строкой, ни MAKEFLAGS', () => {
@@ -379,7 +379,7 @@ describe('make proxy-timeout', () => {
     for (const env of [{ PROXY: 'http://10.0.0.1:3128', PROXY_TIMEOUT: '1s' }, { PROXY: '$(shell touch PWNED)', PROXY_TIMEOUT: '$(shell touch PWNED)' }]) {
       const r = proxyTimeout({ env })
       expect(r.code, r.out).toBe(0)
-      expect(r.out).toContain('прокси: nginx-proxy, домен: invoice.example.by, таймаут: 400s')
+      expect(r.out).toContain('прокси: nginx-proxy, домен: aiconnect.example.by, таймаут: 400s')
       expect(existsSync(join(r.dir, 'PWNED'))).toBe(false)
     }
   })
@@ -407,8 +407,8 @@ describe('make proxy-timeout', () => {
 
 describe('make proxy-timeout: перевод строки в VIRTUAL_HOST', () => {
   it('берётся первая строка, хвост командой не становится', () => {
-    const r = proxyTimeout({ env: { FAKE_VHOST: 'invoice.example.by\\nx; touch PWNED; y.by' } })
-    expect(r.out).toContain('домен: invoice.example.by,')
+    const r = proxyTimeout({ env: { FAKE_VHOST: 'aiconnect.example.by\\nx; touch PWNED; y.by' } })
+    expect(r.out).toContain('домен: aiconnect.example.by,')
     expect(existsSync(join(r.dir, 'PWNED'))).toBe(false)
     expect(existsSync(join(r.root, 'PWNED'))).toBe(false)
   })
@@ -441,10 +441,10 @@ const SHA = 'a8f2ef2b57059e518ff1f14a880dcee79dd41d00'
 const HEALTH = (config: Record<string, boolean> = {}) => JSON.stringify({
   ok: true,
   commit: SHA.slice(0, 7),
-  config: { siteUrl: true, oauth: true, tokenKey: true, appCode: true, trustProxy: true, bitrixGpt: true, ...config },
+  config: { siteUrl: true, oauth: true, tokenKey: true, appCode: true, trustProxy: true, ...config },
   request: { forwardedFor: 'used' }
 })
-const UPSTREAM = (extra = '') => `upstream invoice.example.by {\n    # Container: aiconnect\n    server 172.18.0.14:3000;\n${extra}}\n`
+const UPSTREAM = (extra = '') => `upstream aiconnect.example.by {\n    # Container: aiconnect\n    server 172.18.0.14:3000;\n${extra}}\n`
 const HEALTHY: MakeOpts = {
   env: {
     // Имя без «watchtower»: Watchtower узнаётся по образу, а не по имени контейнера.
@@ -452,7 +452,7 @@ const HEALTHY: MakeOpts = {
     FAKE_HEALTH: HEALTH(),
     FAKE_EXT: HEALTH()
   },
-  files: { 'invoice.example.by_location': 'proxy_read_timeout 400s;\n' },
+  files: { 'aiconnect.example.by_location': 'proxy_read_timeout 400s;\n' },
   conf: `${UPSTREAM()}server {\n    location / {\n        include ${FILE};\n    }\n}\n`
 }
 const doctor = (patch: MakeOpts = {}) => make('doctor', {
@@ -473,8 +473,8 @@ describe('make doctor', () => {
       `✓ настройки сервера заданы, сборка ${SHA.slice(0, 7)}`,
       '✓ у контейнера метка keepalive=disabled',
       '✓ прокси nginx-proxy ходит в приложение без keepalive',
-      '✓ таймаут прокси для invoice.example.by: 400s',
-      '✓ https://invoice.example.by отвечает, адрес клиента виден через прокси',
+      '✓ таймаут прокси для aiconnect.example.by: 400s',
+      '✓ https://aiconnect.example.by отвечает, адрес клиента виден через прокси',
       '✓ сертификат доверенный, действует до Dec 24 10:00:00 2026 GMT',
       '✓ Watchtower запущен',
       '✓ диск docker (/var/lib/docker) занят на 42%'
@@ -496,7 +496,7 @@ describe('make doctor', () => {
   })
 
   it('keepalive соседнего хоста — не наш: upstream ищется по точному имени домена', () => {
-    const neighbour = 'upstream invoicexexample.by {\n    server 172.18.0.9:3000;\n    keepalive 2;\n}\n'
+    const neighbour = 'upstream aiconnectxexample.by {\n    server 172.18.0.9:3000;\n    keepalive 2;\n}\n'
     const r = doctor({ conf: `${neighbour}${UPSTREAM()}server { include ${FILE}; }\n` })
     expect(failures(r)).toEqual([])
   })
@@ -508,25 +508,25 @@ describe('make doctor', () => {
   })
 
   it('в upstream только заглушка «down» — прокси не видит приложение: ✗, а не ложный ✓ про keepalive', () => {
-    const conf = `upstream invoice.example.by {\n    # Fallback entry\n    server 127.0.0.1 down;\n}\nserver { include ${FILE}; }\n`
+    const conf = `upstream aiconnect.example.by {\n    # Fallback entry\n    server 127.0.0.1 down;\n}\nserver { include ${FILE}; }\n`
     const r = doctor({ conf })
     expect(failures(r)).toEqual([expect.stringContaining('нет рабочего сервера')])
   })
 
   it('upstream с отступами и пробелами в конце строк — разбирается так же', () => {
-    const conf = `  upstream invoice.example.by {  \r\n\tserver 172.18.0.14:3000;\r\n\tkeepalive 2;\r\n  }\r\nserver { include ${FILE}; }\n`
+    const conf = `  upstream aiconnect.example.by {  \r\n\tserver 172.18.0.14:3000;\r\n\tkeepalive 2;\r\n  }\r\nserver { include ${FILE}; }\n`
     const r = doctor({ conf })
     expect(failures(r)).toEqual([expect.stringContaining('держит соединения с приложением (keepalive)')])
   })
 
   it('upstream нашего домена в конфиге нет — ✗', () => {
     const r = doctor({ conf: `server { include ${FILE}; }\n` })
-    expect(failures(r)).toEqual([expect.stringContaining('нет upstream invoice.example.by')])
+    expect(failures(r)).toEqual([expect.stringContaining('нет upstream aiconnect.example.by')])
   })
 
   it.each([
     ['файла таймаута нет', { files: {} }],
-    ['таймаут только в комментарии', { files: { 'invoice.example.by_location': '#proxy_read_timeout 400s;\n' } }],
+    ['таймаут только в комментарии', { files: { 'aiconnect.example.by_location': '#proxy_read_timeout 400s;\n' } }],
     ['файл есть, но не подключён', { conf: UPSTREAM() }]
   ])('%s — ✗ и совет make proxy-timeout', (_label, patch) => {
     const r = doctor(patch as MakeOpts)
@@ -546,19 +546,15 @@ describe('make doctor', () => {
     expect(failures(r)).toEqual(['  ✗ контейнер aiconnect: running unhealthy → make logs'])
   })
 
-  it('health: незаданное в .env — ✗ с именем переменной и сборкой; BitrixGPT — ⚠, он необязательный', () => {
-    const r = doctor({ env: { FAKE_HEALTH: HEALTH({ appCode: false, oauth: false, bitrixGpt: false }) } })
+  it('health: незаданное в .env — ✗ с именем переменной и сборкой', () => {
+    const r = doctor({ env: { FAKE_HEALTH: HEALTH({ appCode: false, oauth: false }) } })
     expect(failures(r)).toEqual([`  ✗ не задано в .env: B24_CLIENT_ID/B24_CLIENT_SECRET,B24_APP_CODE → вписать и make prod-up (таблица переменных — docs/DEPLOY.md); сборка ${SHA.slice(0, 7)}`])
-    expect(r.out).toContain('⚠ не задано (необязательно): VIBE_API_KEY/BITRIXGPT_API_KEY')
     expect(r.out).not.toContain('✓ настройки сервера заданы')
   })
 
-  it('не задан только BitrixGPT — ошибок нет, код 0, но и не «всё в порядке»', () => {
-    const r = doctor({ env: { FAKE_HEALTH: HEALTH({ bitrixGpt: false }) } })
-    expect(r.code, r.out).toBe(0)
-    expect(failures(r)).toEqual([])
-    expect(r.out).toContain('[make] ошибок нет, предупреждений: 1')
-    expect(r.out).not.toContain('всё в порядке')
+  it('неизвестный флаг health (сервер новее Makefile) — ✗ с именем флага, а не молчание', () => {
+    const r = doctor({ env: { FAKE_HEALTH: HEALTH({ newFlag: false }) } })
+    expect(failures(r)).toEqual([expect.stringContaining('не задано в .env: newFlag')])
   })
 
   it('TRUST_PROXY задаёт compose-файл, а не .env — совет про compose-update', () => {
@@ -574,7 +570,7 @@ describe('make doctor', () => {
 
   it('https снаружи не отвечает — ✗ с ошибкой curl', () => {
     const r = doctor({ env: { FAKE_EXT: undefined as unknown as string } })
-    expect(failures(r)).toEqual([expect.stringContaining('https://invoice.example.by/api/health не ответил: curl: (7)')])
+    expect(failures(r)).toEqual([expect.stringContaining('https://aiconnect.example.by/api/health не ответил: curl: (7)')])
   })
 
   it('ответ снаружи с пробелами в JSON (DEBUG) — адрес клиента всё равно виден', () => {
@@ -640,7 +636,7 @@ describe('make doctor', () => {
     const two = `p1 nginxproxy/nginx-proxy\\np2 jwilder/nginx-proxy\\nwatchtower containrrr/watchtower\\n`
     const r = doctor({ env: { FAKE_PS: two } })
     expect(failures(r)).toEqual([expect.stringContaining('найдено: 2. Укажите нужный: make doctor PROXY=<имя>')])
-    expect(r.out).toContain('✓ https://invoice.example.by отвечает')
+    expect(r.out).toContain('✓ https://aiconnect.example.by отвечает')
     const chosen = doctor({ env: { FAKE_PS: two }, args: ['PROXY=p1'] })
     expect(chosen.out).toContain('✓ прокси p1 ходит в приложение без keepalive')
   })
