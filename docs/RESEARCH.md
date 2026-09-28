@@ -60,9 +60,34 @@ Reference endpoint from Bitrix24: https://helpdesk.bitrix24.ru/examples/endpoint
 3. Success callback shape for `image` and `audio` (URL, array, text?) — not documented.
 4. What `auth` contains (`application_token`, `member_id`, `domain`?) — decides how we verify
    that a request really comes from an installed portal.
-5. Re-`register` with the same `code`: legacy docs say "updates", current docs list
-   `ENGINE_REGISTER_ERROR_CODE_UNIQUE`. Until measured: `unregister` + `register`.
+5. ~~Re-`register` with the same `code`~~ — measured via webhook, see below: it fails with
+   `ENGINE_REGISTER_ERROR_CODE_UNIQUE`. From an app context (`app_code` set) — still to confirm.
 6. Bitrix24 behaviour on error callback and on expired `ttl`.
+
+## Measured on the test portal (2026-09-28)
+
+Portal `b24-ypkv9c.bitrix24.by` (cloud, zone `.by`), admin inbound webhook, raw REST. Temporary
+providers `sh_aiconnect_probe*` were registered and removed in the same run; `ai.engine.list` was
+empty before and after.
+
+- `methods` with `scope: ai_admin` → `ai.engine.register`, `ai.engine.unregister`,
+  `ai.engine.list`, `ai.prompt.register`, `ai.prompt.unregister`, `ai.history.enable`,
+  `ai.history.disable`, `ai.history.list`. The `ai.prompt.*` / `ai.history.*` methods are not
+  used yet.
+- `ai.engine.register` returns the numeric id. Registered via webhook, the provider has
+  `app_code: null` in `ai.engine.list` — so such a provider gets `auth: null` in requests (docs);
+  our providers must be registered from the app context.
+- Second `register` with the same `code` → `400 ENGINE_REGISTER_ERROR_CODE_UNIQUE`, the record is
+  unchanged. Re-registration is `unregister` + `register` until the app context says otherwise.
+- `completions_url` answering 404 → `400 ENGINE_REGISTER_ERROR_COMPLETIONS_URL_FAIL`: the GET
+  check on registration is real. A URL answering 200 (`https://example.com/`) is accepted.
+- `category: vision` is accepted, although the docs' error text lists only `text, image, audio,
+  call`.
+- `ai.engine.unregister` → `true` for an existing code, `false` for an unknown one (no error).
+- `ai.engine.list` fields: `id`, `app_code`, `name`, `code`, `category`, `completions_url`,
+  `settings` (`model_context_type`, `model_context_limit` as sent), `date_create` (unix seconds).
+- Webhook limits: `event.get` → `403 WRONG_AUTH_TYPE`; `app.info` answers without `CODE`. Both
+  need the installed app.
 
 ## Market landscape (2026-09-28)
 
