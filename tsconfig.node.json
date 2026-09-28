@@ -1,0 +1,21 @@
+{
+  "extends": "./.nuxt/tsconfig.server.json",
+  "compilerOptions": {
+    "noUncheckedIndexedAccess": false
+  },
+  "include": [
+    "./.nuxt/types/nitro-nuxt.d.ts",
+    "./.nuxt/types/nitro.d.ts",
+    "./server/**/*",
+    "./shared/**/*",
+    "./tests/**/*",
+    "./smoke/**/*",
+    "./vitest.config.ts",
+    "./vitest.smoke.config.ts"
+  ],
+  "exclude": [
+    "./node_modules",
+    "./dist",
+    "./tests/nuxt/**"
+  ]
+}

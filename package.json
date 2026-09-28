@@ -1,0 +1,52 @@
+{
+  "name": "aiconnect",
+  "type": "module",
+  "private": true,
+  "description": "Bitrix24 app shef.aiconnect: connect your own AI model (BYOK) to BitrixGPT via ai.engine.register",
+  "license": "MIT",
+  "author": "Igor Shevchik",
+  "homepage": "https://github.com/bx-shef/aiconnect#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bx-shef/aiconnect.git"
+  },
+  "bugs": {
+    "url": "https://github.com/bx-shef/aiconnect/issues"
+  },
+  "scripts": {
+    "dev": "nuxt dev",
+    "build": "nuxt build",
+    "preview": "nuxt preview",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "typecheck": "vue-tsc --noEmit && vue-tsc -p tsconfig.node.json --noEmit",
+    "check": "pnpm lint && pnpm typecheck && pnpm test",
+    "smoke": "vitest run --config vitest.smoke.config.ts",
+    "postinstall": "nuxt prepare"
+  },
+  "dependencies": {
+    "@bitrix24/b24icons-vue": "^2.0.8",
+    "@bitrix24/b24jssdk": "^2.2.0",
+    "@bitrix24/b24ui-nuxt": "^2.13.0",
+    "@vueuse/core": "^14.4.0",
+    "@vueuse/nuxt": "^14.4.0",
+    "nuxt": "^4.5.2",
+    "openai": "^7.3.0",
+    "tailwindcss": "^4.3.3"
+  },
+  "devDependencies": {
+    "@nuxt/eslint": "^1.17.0",
+    "@nuxt/test-utils": "^4.1.0",
+    "@types/node": "^26.2.0",
+    "@vue/test-utils": "^2.4.11",
+    "eslint": "^10.8.1",
+    "happy-dom": "^20.11.2",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.10",
+    "vue-tsc": "^3.3.9"
+  },
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=22"
+  }
+}

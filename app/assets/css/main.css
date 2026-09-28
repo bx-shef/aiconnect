@@ -1,0 +1,23 @@
+@import "tailwindcss" theme(static);
+@import "@bitrix24/b24ui-nuxt";
+
+@layer base {
+  :root, .light {
+    color-scheme: light;
+  }
+
+  .dark {
+    color-scheme: dark;
+  }
+
+  /* Фон и текст страницы — токенами b24ui, с запасными значениями на случай их отсутствия. */
+  body {
+    background-color: var(--air-theme-bg-color, #f1f3f5);
+    color: var(--b24ui-color-text-primary, #111418);
+  }
+
+  .dark body {
+    background-color: var(--air-theme-bg-color, #0b1020);
+    color: var(--b24ui-color-text-primary, #e6e9ef);
+  }
+}

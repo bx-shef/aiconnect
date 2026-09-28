@@ -1,0 +1,148 @@
+name: CI
+
+# PR   → ci (линт → тесты → типы → сборка) + docker-build (образ собирается, в реестр не идёт).
+# main → ci → deploy (образ в GHCR; Watchtower на сервере подхватит его за ~5 минут).
+# Схема — как в эталоне client-bank-alfa-by (docs/DEPLOY.md).
+#
+# Имена джоб `ci` и `docker-build` — обязательные проверки в правиле защиты `main`
+# (docs/REPO_SETUP_CHECKLIST.md): переименуете джобу или она перестанет отчитываться на PR — правило
+# будет ждать её вечно, и ни один PR не вольётся. Переименовывать только вместе с правилом.
+#
+# Сторонние actions закреплены полным SHA (supply-chain: изменяемый тег можно переписать и
+# выполнить код на раннере с GITHUB_TOKEN). Комментарий `# vX.Y.Z` читает Dependabot и держит
+# SHA свежими. SHA сняты из эталона client-bank-alfa-by, где они уже проходят этот CI.
+on:
+  push:
+    branches: [main]
+    # Правка только этих файлов образ не меняет. Без фильтра каждый мерж документации пересобирал бы
+    # образ (у нового digest другие метки времени), и Watchtower перезапускал бы прод. На PR проверки
+    # идут всегда; выкатить вручную — workflow_dispatch.
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - '.claude/**'
+      - 'tests/**'
+      - 'smoke/**'
+      - '.env*.example'
+      - 'Makefile'
+      - 'docker-compose*.yml'
+      - 'LICENSE'
+  pull_request:
+    branches: [main]
+  # Ручной передеплой: тот же конвейер на `main` без коммита (образ пересобирается и уходит в GHCR).
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # Отменяем только устаревшие прогоны PR; выкат `main` посреди отправки в GHCR не обрываем.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: ci
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        # Версия pnpm берётся из поля "packageManager" в package.json.
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Prepare Nuxt
+        # Генерирует .nuxt/eslint.config.mjs и tsconfig, от которых зависят lint и typecheck.
+        run: pnpm exec nuxi prepare
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Test
+        run: pnpm test
+
+      - name: Type check
+        run: pnpm typecheck
+
+      - name: Build
+        run: pnpm build
+
+  docker-build:
+    name: docker-build
+    # Образ собирается на каждом PR (в том числе от Dependabot — там всплывёт смена базового
+    # образа node); в реестр не публикуем.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Build image (no push)
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          push: false
+          # Кэш только читаем: записанный из refs/pull/N/merge виден лишь этому PR, но съедает общий
+          # бюджет кэша репозитория (10 ГБ) и вытесняет кэш `main`. Пишет его только deploy.
+          cache-from: type=gha,scope=app
+          tags: aiconnect:ci
+
+  deploy:
+    name: Build & Push to GHCR
+    # Красный CI не пускает образ в GHCR, а значит и на сервер. Выкатывает только `main` —
+    # пушем или ручным запуском (workflow_dispatch).
+    needs: ci
+    if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write  # отправка в ghcr.io встроенным GITHUB_TOKEN, отдельный секрет не нужен
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ghcr.io/${{ github.repository }}
+          # latest — его тянет Watchtower; sha-<коммит> — для отката на известную версию.
+          tags: |
+            type=raw,value=latest
+            type=sha,prefix=sha-
+
+      # Единственный build-arg — коммит сборки: его показывает GET /api/health, чтобы с сервера
+      # было видно, какой образ запущен и докатил ли Watchtower новый. Адрес и секреты образ
+      # читает из окружения при запуске (Dockerfile), поэтому один образ годится для любого сервера.
+      - name: Build and push
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          push: true
+          build-args: COMMIT_SHA=${{ github.sha }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=app
+          cache-to: type=gha,mode=max,scope=app

@@ -1,0 +1,49 @@
+version: 2
+updates:
+  # --- Зависимости приложения (pnpm) ---------------------------------------------
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    versioning-strategy: increase
+    groups:
+      # Фреймворк и его модули двигаются вместе — один PR.
+      nuxt:
+        patterns:
+          - "nuxt"
+          - "@nuxt/*"
+      # Вся линейка Битрикс24 — один PR.
+      b24:
+        patterns:
+          - "@bitrix24/*"
+      dev-deps:
+        dependency-type: development
+
+  # --- Версии GitHub Actions ------------------------------------------------------
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+  # --- Базовый образ Docker -------------------------------------------------------
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      docker:
+        patterns:
+          - "*"
+    # Node 25+ убрал corepack из официальных образов (`corepack enable` → exit 127).
+    # Остаёмся на линии 22 LTS; мажор поднимаем руками вместе с починкой corepack.
+    ignore:
+      - dependency-name: "node"
+        update-types: ["version-update:semver-major"]
