@@ -6,11 +6,17 @@ import type { WindowLimit } from './rateLimit'
 
 /** Тело события портала — PHP-форма в несколько сотен байт; 64 КБ — с большим запасом. */
 export const EVENTS_BODY_LIMIT = 64 * 1024
-/**
- * Прочие POST. Своих POST-обработчиков, кроме событий, на этапе 0 нет; предел — с запасом под
- * запросы BitrixGPT к `completions_url` (этап 1 docs/PLAN.md замерит их размер).
- */
+/** Прочие POST (настройки шпиона и будущие обработчики из фрейма). */
 export const API_BODY_LIMIT = 512 * 1024
+/**
+ * Запросы BitrixGPT на `completions_url` (`/api/engine/…`). Размер не документирован: у `audio`
+ * в `prompt` приходит файл, и в каком виде (ссылка или содержимое) — замерит шпион этапа 1.
+ * 16 МБ — с запасом; тело читается только после проверки подписи портала в пути
+ * (server/api/engine/[portal]/[category].ts), так что чужой поток его не буферизует.
+ */
+export const ENGINE_BODY_LIMIT = 16 * 1024 * 1024
+/** Запросов BitrixGPT в минуту на портал — шпиону хватит с большим запасом. */
+export const ENGINE_REQUESTS_PER_PORTAL: WindowLimit = { max: 120, windowMs: 60_000 }
 
 /**
  * Частота событий установки и удаления с одного адреса (прочие события не считаются —
@@ -31,7 +37,8 @@ export const FRAME_CHECKS_PER_IP: WindowLimit = { max: 60, windowMs: 60_000 }
 /** Предел тела для пути; `null` — путь не ограничиваем (страницы, GET). */
 export function bodyLimitFor(method: string, path: string): number | null {
   if (method.toUpperCase() !== 'POST' || !path.startsWith('/api/')) return null
-  return path.startsWith('/api/b24/events') ? EVENTS_BODY_LIMIT : API_BODY_LIMIT
+  if (path.startsWith('/api/b24/events')) return EVENTS_BODY_LIMIT
+  return path.startsWith('/api/engine/') ? ENGINE_BODY_LIMIT : API_BODY_LIMIT
 }
 
 export type BodyVerdict = { ok: true } | { ok: false, status: 411 | 413 }

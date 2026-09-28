@@ -42,7 +42,8 @@ onMounted(async () => {
       </h1>
       <p>
         Приложение подключает вашу собственную AI-модель (ваш API-ключ) к BitrixGPT: она появится
-        в списках выбора модели в настройках BitrixGPT. Подключение провайдеров — в следующих версиях.
+        в списках выбора модели в настройках BitrixGPT. Подключение провайдеров — в следующих версиях;
+        пока администратору доступен шпион протокола — он показывает, что присылает BitrixGPT.
       </p>
 
       <B24Alert
@@ -75,6 +76,13 @@ onMounted(async () => {
           </p>
         </template>
       </B24Alert>
+      <B24Button
+        v-if="isAdmin"
+        color="air-primary"
+        label="Шпион протокола"
+        to="/spy"
+        data-testid="app-spy"
+      />
       <B24Alert
         v-if="loadError"
         color="air-primary-alert"

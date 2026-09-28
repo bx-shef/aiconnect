@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { API_BODY_LIMIT, bodyLimitFor, checkBodySize, EVENTS_BODY_LIMIT, forwardedStatus, ipBucketKey, isPrivateAddress, pickClientIp } from '../../server/utils/requestLimits'
+import { API_BODY_LIMIT, bodyLimitFor, checkBodySize, ENGINE_BODY_LIMIT, EVENTS_BODY_LIMIT, forwardedStatus, ipBucketKey, isPrivateAddress, pickClientIp } from '../../server/utils/requestLimits'
 
 describe('bodyLimitFor', () => {
   it('события портала — 64 КБ, прочие POST к /api — 512 КБ', () => {
     expect(bodyLimitFor('POST', '/api/b24/events')).toBe(EVENTS_BODY_LIMIT)
     expect(bodyLimitFor('post', '/api/rates')).toBe(API_BODY_LIMIT)
+    expect(bodyLimitFor('POST', '/api/engine/abc.def/text')).toBe(ENGINE_BODY_LIMIT)
+    expect(bodyLimitFor('POST', '/api/spy')).toBe(API_BODY_LIMIT)
   })
 
   it('страницы и GET не ограничиваем (портал POST-ит на страницы приложения)', () => {
