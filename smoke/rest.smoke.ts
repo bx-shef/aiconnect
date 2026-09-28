@@ -23,4 +23,14 @@ describe.skipIf(!env)('REST: формы ответов портала', () => {
     expect(Array.isArray(scopes)).toBe(true)
     for (const s of scopes as unknown[]) expect(typeof s).toBe('string')
   })
+
+  it('ai.engine.list: массив; у записи есть code, category, completions_url (docs/RESEARCH.md)', async () => {
+    const list = await portal.call<unknown>('ai.engine.list')
+    expect(Array.isArray(list)).toBe(true)
+    for (const e of list as Array<Record<string, unknown>>) {
+      expect(typeof e.code).toBe('string')
+      expect(typeof e.category).toBe('string')
+      expect(typeof e.completions_url).toBe('string')
+    }
+  })
 })

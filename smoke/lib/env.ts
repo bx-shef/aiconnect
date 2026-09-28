@@ -14,7 +14,7 @@ export const DEFAULT_SMOKE_ENV_FILE = '.env.b24test'
 
 /** Порталы, на которых смоку разрешено работать. Домен — не секрет; секрет — код в пути вебхука. */
 export const TEST_PORTALS: ReadonlySet<string> = new Set([
-  'b24-ypkv9c.bitrix24.by' // тестовый портал шаблона invoice-from-tasks (с 24.09.2026)
+  'b24-ypkv9c.bitrix24.by' // тестовый портал aiconnect (владелец, 2026-09-28); раньше — шаблона invoice-from-tasks
 ])
 
 /**
