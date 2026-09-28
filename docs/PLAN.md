@@ -1,70 +1,72 @@
-# Work plan — shef.aiconnect
+# План работ — shef.aiconnect
 
 > Last reviewed: 2026-09-28
 
-App code `shef.aiconnect`, repository `bx-shef/aiconnect`, provider codes
-`sh_aiconnect_<category>`. We sell the connection: the client's own model (own API key) inside
-BitrixGPT. Background — `docs/RESEARCH.md`. Every stage is its own PR; nothing goes to `main`
-directly (`docs/AGENT_RULES.md` §2).
+Код приложения `shef.aiconnect`, репозиторий `bx-shef/aiconnect`, коды провайдеров
+`sh_aiconnect_<category>`. Продаём подключение: собственная модель клиента (его API-ключ) внутри
+BitrixGPT. Предыстория — `docs/RESEARCH.md`. Каждый этап — свой PR; в `main` напрямую ничего не
+идёт (`docs/AGENT_RULES.md` §2).
 
-## Stage 0 — clean scaffold (PR #1)
+## Этап 0 — чистый каркас (bx-shef/aiconnect#5, смержен)
 
-The repository starts as an import of `bx-shef/invoice-from-tasks` (only the identity was
-renamed). Remove the invoice domain: `invoice` page and components, invoice composables,
-`shared/domain/*` of invoices/rates/VAT/tasks, the placement, `ai/names`, `ai/consult`,
-`rates`, their tests and smoke, invoice docs (`PROCESSING`, invoice parts of `SETTINGS`,
-`REST_METHODS`, `ARCHITECTURE`, `project-map`, `b24-docs` skill pitfalls). Keep `frameAuth`,
-`tokenStore`, `secretCrypto`, `b24Events`, `verifyInstallMember`, `b24Host`, `rateLimit`,
-`requestLimits`, CI, Docker, deploy.
-Scopes: `ai_admin`, `user_brief`. Drop the `openai` package (AI SDK comes in stage 2).
-**Done when:** the app installs on the test portal, tokens are stored, CI is green.
+Репозиторий начат импортом `bx-shef/invoice-from-tasks` (переименована только идентичность).
+Убрать предметную часть счетов: страницу `invoice` и её компоненты, composables счёта,
+`shared/domain/*` счетов, ставок, НДС и задач, встройку, `ai/names`, `ai/consult`, `rates`, их
+тесты и смок, документы счетов (`PROCESSING`, части `SETTINGS`, `REST_METHODS`, `ARCHITECTURE`,
+`project-map` и грабли навыка `b24-docs` про счета). Оставить `frameAuth`, `tokenStore`,
+`secretCrypto`, `b24Events`, `verifyInstallMember`, `b24Host`, `rateLimit`, `requestLimits`, CI,
+Docker, выкат.
+Права: `ai_admin`, `user_brief`. Убрать пакет `openai` (AI SDK появится на этапе 2).
+**Готово, когда:** приложение ставится на тестовый портал, токены сохраняются, CI зелёный.
+Код смержен; живая установка — bx-shef/aiconnect#6.
 
-## Stage 1 — protocol spy (PR #2)
+## Этап 1 — шпион протокола
 
-- `/api/engine/[category]`: GET → 200; POST → log the payload (`auth` masked, `prompt`
-  truncated) → 202 → POST an error to `errorCallbackUrl` with `api_request_completed=false`.
-- A button registers the spy for all 6 categories ("TEST text", "TEST call", …).
-- Run portal scenarios: AI chat, tasks, feed, CRM (transcription, summary, script scoring,
-  auto-activities — the owner provides calls: short, 10+ min, one with a script), video calls,
-  sites.
-- Also: send a successful `callbackUrl`, see behaviour on error and on expired `ttl`.
-- **Result:** `docs/PROTOCOL.md` with real payloads answering the "Unverified" list of
+- `/api/engine/[category]`: GET → 200; POST → записать запрос в журнал (`auth` замаскирован,
+  `prompt` обрезан) → 202 → POST ошибки на `errorCallbackUrl` с `api_request_completed=false`.
+- Кнопка регистрирует шпиона на все 6 категорий («TEST text», «TEST call», …).
+- Прогнать сценарии портала: AI-чат, задачи, лента, CRM (расшифровка, резюме, оценка по
+  скрипту, автодела — звонки даёт владелец: короткий, 10+ минут, один по скрипту), видеозвонки,
+  сайты.
+- Ещё: отправить успешный `callbackUrl`, посмотреть поведение при ошибке и при истёкшем `ttl`.
+- **Результат:** `docs/PROTOCOL.md` с настоящими запросами — ответы на список «Не проверено» из
   `docs/RESEARCH.md`.
 
-## Stage 2 — text via DeepSeek (PR #3, full review panel)
+## Этап 2 — текст через DeepSeek (полная панель ревью)
 
-- Vercel AI SDK: `createOpenAICompatible` with `baseURL` (DeepSeek may use `@ai-sdk/deepseek`).
-- Messages: `payload_role` → system, `context` only with `collect_context`, `prompt` → user;
-  `max_tokens`, `temperature` from the request; reasoning content never goes to the callback.
-- Queue in `unstorage`: 202 at once, a worker calls the model and sends the callback; retries
-  within `ttl`; pending jobs picked up after restart.
-- Errors: provider 401/402 → error callback; 429/5xx → retry, then error callback; callback
-  delivery failure → retry delivery.
-- Security: portal verified by `auth` + per-portal HMAC in the path; callback URLs only
-  `https` on the portal's own host (SSRF); key encrypted, neither key nor texts in logs.
-- **Done when:** AI chat and call summary on the test portal answer via DeepSeek. Unit tests for
-  message building, callback host check, error mapping.
+- Vercel AI SDK: `createOpenAICompatible` с `baseURL` (для DeepSeek можно `@ai-sdk/deepseek`).
+- Сообщения: `payload_role` → system, `context` — только при `collect_context`, `prompt` → user;
+  `max_tokens`, `temperature` — из запроса; рассуждения модели в callback не уходят никогда.
+- Очередь в `unstorage`: сразу 202, воркер зовёт модель и шлёт callback; повторы в пределах
+  `ttl`; незавершённые задания подхватываются после перезапуска.
+- Ошибки: провайдер 401/402 → error callback; 429/5xx → повтор, затем error callback; сбой
+  доставки callback → повтор доставки.
+- Безопасность: портал подтверждается по `auth` + HMAC портала в пути; адреса callback — только
+  `https` на хосте самого портала (SSRF); ключ зашифрован, ни ключа, ни текстов в журналах.
+- **Готово, когда:** AI-чат и резюме звонка на тестовом портале отвечают через DeepSeek.
+  Юнит-тесты на сборку сообщений, проверку хоста callback, разбор ошибок.
 
-## Stage 3 — settings (PR #4)
+## Этап 3 — настройки
 
-- b24ui, admin only: `baseURL`, key, "Check" (`GET /models`), model per category, enabled
-  categories, provider `name` shown in Bitrix24 selectors.
-- Save → `unregister` + `register` (or update, per stage 1). `model_context_limit` from the
-  model.
-- `ONAPPUNINSTALL` wipes the portal's key and jobs.
+- b24ui, только администратор: `baseURL`, ключ, «Проверить» (`GET /models`), модель на
+  категорию, включённые категории, `name` провайдера, который видно в списках Битрикс24.
+- Сохранение → `unregister` + `register` (повторный `register` с тем же `code` отклоняется —
+  замер в `docs/RESEARCH.md`). `model_context_limit` — из модели.
+- `ONAPPUNINSTALL` стирает ключ и задания портала.
 
-## Stage 4 — hardening (PR #5)
+## Этап 4 — укрепление
 
-Per-portal rate limit; metrics without content (jobs accepted, callback result, provider
-latency); smoke on a real portal: register → request → callback.
+Лимит частоты на портал; метрики без содержимого (принято заданий, результат callback, задержка
+провайдера); смок на живом портале: регистрация → запрос → callback.
 
-## Stage 5 — other categories (after MVP)
+## Этап 5 — остальные категории (после MVP)
 
-`call`/`audio` via a Whisper-compatible provider; `image`, `vision` per `docs/PROTOCOL.md`;
-provider selectable per category.
+`call`/`audio` через Whisper-совместимого провайдера; `image`, `vision` — по `docs/PROTOCOL.md`;
+провайдер выбирается на категорию.
 
-## Stage 6 — Market
+## Этап 6 — Маркет
 
-EULA and privacy policy (base: `bx-shef/ai-price-import` documents); state that data goes to the
-provider chosen by the client under the client's key (DeepSeek — China). Market card ("your key —
-your model in BitrixGPT"), DeepSeek key how-to, moderation.
+EULA и политика конфиденциальности (основа — документы `bx-shef/ai-price-import`); прямо
+сказать, что данные уходят провайдеру, которого выбрал клиент, под ключом клиента (DeepSeek —
+Китай). Карточка в Маркете («ваш ключ — ваша модель в BitrixGPT»), инструкция по ключу DeepSeek,
+модерация.
