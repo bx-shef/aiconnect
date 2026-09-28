@@ -1,6 +1,6 @@
-// POST /api/b24/events — входящие события портала: установка и удаление приложения.
-// Решение принимает `handleB24Event` (server/utils/b24EventsHandler.ts, покрыт тестами); здесь —
-// только чтение тела и живые зависимости. Контракт — docs/B24_EVENTS.md.
+// POST /api/b24/events — incoming portal events: app install and uninstall.
+// `handleB24Event` makes the decision (server/utils/b24EventsHandler.ts, covered by tests); this
+// file only reads the body and wires in live dependencies. Contract — docs/B24_EVENTS.md.
 
 import { oauthCredsFromEnv } from '../../utils/b24Client'
 import { handleB24Event } from '../../utils/b24EventsHandler'
@@ -28,7 +28,7 @@ export default defineEventHandler(async (event) => {
     setResponseStatus(event, result.status)
     return result.body
   } catch (err) {
-    // Текст ошибки может нести member_id, но не токены; наружу — только общий ответ.
+    // The error text may carry member_id, but never tokens; only a generic response goes out.
     console.error(`[b24-events] handler error: ${(err as Error)?.message}`)
     setResponseStatus(event, 500)
     return { error: 'internal error' }

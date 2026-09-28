@@ -1,6 +1,6 @@
 <script setup lang="ts">
-// Публичная страница: что это за приложение. Внутри портала она не используется —
-// портал открывает /app (главная) и /install.
+// Public page: what this app is. It isn't used inside the portal —
+// the portal opens /app (home) and /install.
 useSeoMeta({
   title: 'aiconnect — своя AI-модель в BitrixGPT',
   description: 'Приложение для облачного Битрикс24: подключает вашу собственную AI-модель (ваш API-ключ) к BitrixGPT как провайдера.'

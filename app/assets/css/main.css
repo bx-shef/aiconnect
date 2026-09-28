@@ -10,7 +10,7 @@
     color-scheme: dark;
   }
 
-  /* Фон и текст страницы — токенами b24ui, с запасными значениями на случай их отсутствия. */
+  /* Page background and text — via b24ui tokens, with fallback values in case they're missing. */
   body {
     background-color: var(--air-theme-bg-color, #f1f3f5);
     color: var(--b24ui-color-text-primary, #111418);

@@ -1,11 +1,11 @@
-// Установка: какие вызовы сделать и чего не хватает. Чистые функции — порядок и состав
-// вызовов проверяются тестом, а сама страница (pages/install.vue) лишь исполняет их.
+// Installation: which calls to make and what's missing. Pure functions — the order and
+// composition of calls are covered by tests, while the page itself (pages/install.vue) just runs them.
 
 import { B24_REQUIRED_SCOPES, BOUND_EVENTS, EVENTS_HANDLER_PATH } from '~/config/b24'
 
 /**
- * Адрес обработчика, пригодный для event.bind: только абсолютный https.
- * Относительный Битрикс24 не примет, а http отвергнет браузер во фрейме портала.
+ * A handler address suitable for event.bind: absolute https only.
+ * Bitrix24 won't accept a relative one, and the browser will reject http inside the portal frame.
  */
 export function absoluteHandler(siteUrl: string, path: string): string | null {
   try {
@@ -16,7 +16,7 @@ export function absoluteHandler(siteUrl: string, path: string): string | null {
   }
 }
 
-/** Каких прав не хватает приложению (ответ метода `scope` — массив строк). */
+/** Which scopes the app is missing (response of the `scope` method — an array of strings). */
 export function missingScopes(granted: unknown): string[] {
   const have = new Set(Array.isArray(granted) ? granted.map(String) : [])
   return B24_REQUIRED_SCOPES.filter(s => !have.has(s))
@@ -28,8 +28,8 @@ export interface BindCall {
 }
 
 /**
- * Подписки на события, которых ещё нет. `existing` — ответ `event.get`: повторная установка
- * не должна плодить дубли и падать на «уже подписан».
+ * Event subscriptions that don't exist yet. `existing` is the `event.get` response: a repeat
+ * install must not create duplicates or fail with "already subscribed".
  */
 export function eventBindCalls(siteUrl: string, existing: unknown): BindCall[] {
   const handler = absoluteHandler(siteUrl, EVENTS_HANDLER_PATH)
@@ -44,10 +44,10 @@ export function eventBindCalls(siteUrl: string, existing: unknown): BindCall[] {
 }
 
 /**
- * Подписки нашего приложения на события установки и удаления со СТАРЫМ адресом (переезд
- * сервера) — их снимаем `event.unbind` (`event`, `handler` — документация метода): иначе
- * переустановка только дописывала бы новые подписки, и старые оставались мёртвым грузом.
- * `event.get` отдаёт подписки только нашего приложения.
+ * Our app's install/uninstall event subscriptions with the OLD address (a server move) —
+ * we remove them via `event.unbind` (`event`, `handler` — method docs): otherwise a reinstall
+ * would only append new subscriptions, leaving the old ones as dead weight.
+ * `event.get` returns only our app's subscriptions.
  */
 export function staleEventHandlers(siteUrl: string, existing: unknown): Array<{ event: string, handler: string }> {
   const handler = absoluteHandler(siteUrl, EVENTS_HANDLER_PATH)

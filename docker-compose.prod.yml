@@ -1,16 +1,16 @@
-# Продакшн — на сервере в /home/bitrix/aiconnect/ (docs/DEPLOY.md, схема эталона client-bank-alfa-by).
-# Требует на хосте:
-#   - docker-сеть proxy-net и общий nginx-proxy + acme-companion (TLS Let's Encrypt) — ставятся
-#     один раз на сервер (currency-converter/docker-compose.nginxproxy.yml);
-#   - Watchtower, запущенный с --label-enable, — один на сервер: подхватит контейнер по метке ниже.
-#     Свой Watchtower здесь НЕ поднимаем: второй экземпляр конфликтует по container_name и
-#     плодит двойные перезапуски.
-#   - .env рядом с этим файлом (шаблон — раздел «Прод» в .env.example).
+# Production — on the server at /home/bitrix/aiconnect/ (docs/DEPLOY.md, client-bank-alfa-by reference scheme).
+# Requires on the host:
+#   - docker network proxy-net and a shared nginx-proxy + acme-companion (TLS Let's Encrypt) — set up
+#     once per server (currency-converter/docker-compose.nginxproxy.yml);
+#   - Watchtower, run with --label-enable — one per server: it will pick up the container by the label below.
+#     We do NOT run our own Watchtower here: a second instance conflicts on container_name and
+#     causes double restarts.
+#   - .env next to this file (template — the "Prod" section in .env.example).
 #
-# Один контейнер: Nitro отдаёт страницы приложения и /api на :3000. Наружу его выставляет
-# nginx-proxy по VIRTUAL_HOST — отдельного порта на хосте нет.
+# One container: Nitro serves the app pages and /api on :3000. It's exposed externally by
+# nginx-proxy via VIRTUAL_HOST — there's no separate port on the host.
 
-# Ротация логов: без неё docker пишет json-file без предела и со временем забивает диск.
+# Log rotation: without it docker writes json-file with no limit and eventually fills the disk.
 x-logging: &default-logging
   driver: json-file
   options:
@@ -25,41 +25,41 @@ services:
     container_name: aiconnect
     expose:
       - "3000"
-    # Всё окружение приложения — из .env целиком: новая переменная сервера доедет до контейнера без
-    # правки этого файла. Ниже — только то, что compose задаёт сам или требует обязательно
-    # (environment главнее env_file).
+    # All app environment comes from .env as a whole: a new server variable reaches the container without
+    # editing this file. Below is only what compose itself sets or requires
+    # (environment takes precedence over env_file).
     env_file: .env
     environment:
-      # nginx-proxy + acme-companion: по этим переменным прокси найдёт контейнер и выпустит TLS.
-      # ⚠ DNS A-запись DOMAIN должна указывать на сервер ДО подъёма, иначе сертификат не выпустится.
+      # nginx-proxy + acme-companion: the proxy finds the container and issues TLS using these variables.
+      # ⚠ The DOMAIN DNS A record must point to the server BEFORE startup, otherwise the certificate won't issue.
       VIRTUAL_HOST: ${DOMAIN:?set DOMAIN (aiconnect.bx-shef.by)}
       VIRTUAL_PORT: 3000
       LETSENCRYPT_HOST: ${DOMAIN}
       LETSENCRYPT_EMAIL: ${LETSENCRYPT_EMAIL:-}
-      # Из адреса строится обработчик событий (/api/b24/events).
+      # The event handler (/api/b24/events) is built from this address.
       NUXT_PUBLIC_SITE_URL: https://${DOMAIN}
-      # Приложение за nginx-proxy: адрес клиента берём из X-Forwarded-For (прокси его дописывает),
-      # иначе все запросы выглядят пришедшими с адреса прокси и лимиты по IP становятся общими.
-      # Заголовку сервер верит только от соединений из частной сети — proxy-net такая.
+      # The app is behind nginx-proxy: we take the client address from X-Forwarded-For (the proxy appends it),
+      # otherwise all requests appear to come from the proxy's address and the IP limits become shared.
+      # The server trusts this header only from connections within the private network — proxy-net is one.
       TRUST_PROXY: "1"
-      # Шифрование токенов установки. Обязателен: без него установка падает с 500.
-      # ⚠ Копия ключа — вне сервера: потеря или смена делает сохранённые токены нечитаемыми.
-      # Остальное (ключи и код приложения из Маркета) — из .env; что не задано, показывают
-      # главная страница приложения администратору и GET /api/health.
+      # Encryption for install tokens. Required: without it install fails with 500.
+      # ⚠ Keep a copy of the key off the server: losing or changing it makes saved tokens unreadable.
+      # Everything else (keys and the app code from the Marketplace) comes from .env; whatever isn't set is
+      # shown to the admin on the app's home page and via GET /api/health.
       B24_TOKEN_ENC_KEY: ${B24_TOKEN_ENC_KEY:?set B24_TOKEN_ENC_KEY (openssl rand -hex 32)}
     volumes:
-      # Токены установки порталов (fs-хранилище Nitro). Без тома пересоздание контейнера — а
-      # Watchtower пересоздаёт его на каждом выкате — их потеряет, и сервер перестанет
-      # узнавать порталы до переустановки приложения.
+      # Portal install tokens (Nitro fs storage). Without the volume, recreating the container — and
+      # Watchtower recreates it on every deploy — loses them, and the server stops
+      # recognizing portals until the app is reinstalled.
       - portals:/app/.data
     restart: unless-stopped
-    # Nitro на SIGTERM перестаёт принимать запросы и ждёт начатые до 30 с (NITRO_SHUTDOWN_TIMEOUT);
-    # по умолчанию Docker убил бы процесс через 10 с посреди начатого ответа. ⚠ Watchtower
-    # останавливает контейнер со своим --stop-timeout (по умолчанию 10 с) — это настройка хоста.
+    # On SIGTERM, Nitro stops accepting requests and waits up to 30s for in-flight ones (NITRO_SHUTDOWN_TIMEOUT);
+    # by default Docker would kill the process after 10s in the middle of a started response. ⚠ Watchtower
+    # stops the container with its own --stop-timeout (default 10s) — that's a host setting.
     stop_grace_period: 40s
     healthcheck:
-      # В node:22-slim нет wget и curl — проверяем самим node. 127.0.0.1, а не localhost:
-      # localhost в контейнере резолвится и в ::1.
+      # node:22-slim has no wget or curl — we check with node itself. 127.0.0.1, not localhost:
+      # localhost resolves to ::1 too inside the container.
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
       interval: 30s
       timeout: 5s
@@ -68,12 +68,12 @@ services:
     networks:
       - proxy-net
     labels:
-      # Подхватит общий Watchtower хоста (запущен с --label-enable).
+      # Picked up by the host's shared Watchtower (run with --label-enable).
       - "com.centurylinklabs.watchtower.enable=true"
-      # nginx-proxy по умолчанию держит соединения с приложением открытыми (keepalive, до 60 с), а Node
-      # закрывает простаивающие через 5 с. Запрос в закрытое соединение — 502, и POST nginx не
-      # повторяет, а Битрикс24 открывает страницы приложения именно POST-ом (замер 2026-09-25: 502 на
-      # /app сразу после установки). Без keepalive каждый запрос идёт новым соединением — гонки нет.
+      # nginx-proxy keeps connections to the app open by default (keepalive, up to 60s), while Node
+      # closes idle ones after 5s. A request into a closed connection gives 502, and nginx doesn't
+      # retry POST, and Bitrix24 opens the app pages specifically with POST (measured 2026-09-25: 502 on
+      # /app right after install). Without keepalive every request is a new connection — no race.
       - "com.github.nginx-proxy.nginx-proxy.keepalive=disabled"
 
 volumes:

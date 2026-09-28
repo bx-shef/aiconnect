@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { assertTestPortal, parseSmokeEnv, readEnvValue, TEST_PORTALS } from '../smoke/lib/env'
 
-describe('smoke: чтение файла окружения', () => {
-  it('последнее вхождение, кавычки, export; комментарий и ключ-суффикс не считаются', () => {
+describe('smoke: reading the env file', () => {
+  it('last occurrence, quotes, export; a comment or a suffixed key do not count', () => {
     const text = [
       'B24_HOOK=https://old.bitrix24.by/rest/1/a/',
       '#B24_HOOK=https://commented.bitrix24.by/rest/1/b/',
@@ -13,28 +13,28 @@ describe('smoke: чтение файла окружения', () => {
     expect(readEnvValue('', 'B24_HOOK')).toBe('')
   })
 
-  it('пустое значение последней строкой перебивает прежнее (семантика dotenv)', () => {
+  it('an empty value on the last line overrides the previous one (dotenv semantics)', () => {
     expect(readEnvValue('B24_HOOK=https://a.bitrix24.by/rest/1/a/\nB24_HOOK=', 'B24_HOOK')).toBe('')
   })
 
-  it('закомментированная или чужая строка ПОСЛЕ нужной не перебивает её', () => {
+  it('a commented-out or unrelated line AFTER the target one does not override it', () => {
     const text = 'B24_HOOK=https://test.bitrix24.by/rest/1/a/\n#B24_HOOK=https://prod.bitrix24.ru/rest/1/b/\nOLD_B24_HOOK=https://old.bitrix24.ru/rest/1/c/'
     expect(readEnvValue(text, 'B24_HOOK')).toBe('https://test.bitrix24.by/rest/1/a/')
   })
 
-  it('нет вебхука — null (смок пропускается); не https — ошибка без адреса в тексте', () => {
+  it('no webhook — null (smoke test is skipped); not https — error without the address in the text', () => {
     expect(parseSmokeEnv('OTHER=x')).toBeNull()
     expect(() => parseSmokeEnv('B24_HOOK=http://p.bitrix24.by/rest/1/secret/')).toThrow(/не https/)
     expect(() => parseSmokeEnv('B24_HOOK=http://p.bitrix24.by/rest/1/secret/')).not.toThrow(/secret/)
   })
 
-  it('хост — в нижнем регистре, адрес вебхука — как есть', () => {
+  it('host is lowercased, webhook address is kept as-is', () => {
     expect(parseSmokeEnv('B24_HOOK=https://P.Bitrix24.by/rest/1/x/')).toEqual({ hook: 'https://P.Bitrix24.by/rest/1/x/', host: 'p.bitrix24.by' })
   })
 })
 
-describe('smoke: страж тестового портала', () => {
-  it('портал из списка — можно; чужой — отказ; чужой с явным согласием на ЭТОТ домен — можно', () => {
+describe('smoke: test portal guard', () => {
+  it('a listed portal is allowed; an unrelated one is refused; an unrelated one with explicit consent for THAT domain is allowed', () => {
     const [known] = [...TEST_PORTALS]
     expect(() => assertTestPortal(known!)).not.toThrow()
     expect(() => assertTestPortal('client.bitrix24.ru')).toThrow(/не в списке тестовых/)

@@ -1,6 +1,7 @@
-// Пределы тела запросов к /api (server/utils/requestLimits.ts). Частота событий установки
-// считается в самом обработчике — после разбора кода события (server/utils/b24EventsHandler.ts):
-// middleware тело не читает и не отличила бы установку от потока посторонних событий.
+// Body limits for /api requests (server/utils/requestLimits.ts). The rate of install events is
+// counted in the handler itself — after the event code is parsed (server/utils/b24EventsHandler.ts):
+// this middleware doesn't read the body, so it couldn't tell an install apart from a flood of
+// unrelated events.
 
 import { bodyLimitFor, checkBodySize } from '../utils/requestLimits'
 

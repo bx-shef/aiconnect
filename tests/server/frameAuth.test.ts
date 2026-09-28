@@ -18,7 +18,7 @@ function headers(map: Record<string, string>) {
   return { get: (name: string) => map[name] ?? null }
 }
 
-/** Портал отвечает как настоящий: `profile` — сотрудник, `app.info` — наше приложение. */
+/** Portal responds like the real thing: `profile` — the employee, `app.info` — our application. */
 function portal(profile: Record<string, unknown> = { ID: '7' }, code = APP) {
   return vi.fn(async (_d: string, _t: string, method: string) => (method === 'profile' ? profile : { CODE: code }))
 }
@@ -39,12 +39,12 @@ async function installedKv(): Promise<KeyValue> {
 }
 
 describe('extractFrameAuth', () => {
-  it('берёт Bearer-токен и домен (в том числе с протоколом, как отдаёт SDK)', () => {
+  it('takes the Bearer token and domain (including with protocol, as the SDK sends it)', () => {
     expect(extractFrameAuth(headers({ 'authorization': 'Bearer tok', 'x-b24-domain': 'https://demo.bitrix24.ru' }), {}))
       .toEqual({ domain: 'demo.bitrix24.ru', accessToken: 'tok' })
   })
 
-  it('чужой домен, нет токена или не Bearer — null', () => {
+  it('disallowed domain, no token, or not Bearer — null', () => {
     expect(extractFrameAuth(headers({ 'authorization': 'Bearer tok', 'x-b24-domain': 'evil.com' }), {})).toBeNull()
     expect(extractFrameAuth(headers({ 'x-b24-domain': 'demo.bitrix24.ru' }), {})).toBeNull()
     expect(extractFrameAuth(headers({ 'authorization': 'Basic tok', 'x-b24-domain': 'demo.bitrix24.ru' }), {})).toBeNull()
@@ -54,40 +54,40 @@ describe('extractFrameAuth', () => {
 describe('verifyFrame', () => {
   const auth = { domain: 'demo.bitrix24.ru', accessToken: 'tok' }
 
-  it('без B24_APP_CODE — 503, а не пропуск проверки; в портал не ходим', async () => {
+  it('without B24_APP_CODE — 503, not a skipped check; no call to the portal', async () => {
     const call = portal()
     const res = await verifyFrame(auth, { kv: await installedKv(), call, appCode: '' })
     expect(res).toMatchObject({ ok: false, status: 503 })
     expect(call).not.toHaveBeenCalled()
   })
 
-  it('портал без установки — 409, в портал даже не ходим', async () => {
+  it('portal without an install — 409, no call to the portal at all', async () => {
     const call = portal()
     const res = await verifyFrame(auth, { kv: memoryKv(), call, appCode: APP })
     expect(res).toMatchObject({ ok: false, status: 409 })
     expect(call).not.toHaveBeenCalled()
   })
 
-  it('пользователь и признак администратора — из profile', async () => {
+  it('user and admin flag — from profile', async () => {
     const res = await verifyFrame(auth, { kv: await installedKv(), call: portal({ ID: '7', ADMIN: true }), appCode: APP })
     expect(res).toMatchObject({ ok: true, user: { userId: 7, isAdmin: true } })
   })
 
-  it('ADMIN строкой "true" — не администратор (строгая проверка)', async () => {
+  it('ADMIN as the string "true" — not an admin (strict check)', async () => {
     const res = await verifyFrame(auth, { kv: await installedKv(), call: portal({ ID: '7', ADMIN: 'true' }), appCode: APP })
     expect(res).toMatchObject({ ok: true, user: { isAdmin: false } })
   })
 
-  it('profile без сотрудника — 401', async () => {
+  it('profile without an employee — 401', async () => {
     expect(await verifyFrame(auth, { kv: await installedKv(), call: portal({}), appCode: APP })).toMatchObject({ ok: false, status: 401 })
   })
 
-  it('токен чужого приложения на том же портале — 403', async () => {
+  it('another application\'s token on the same portal — 403', async () => {
     const deps: VerifyDeps = { kv: await installedKv(), appCode: APP, call: portal({ ID: 7 }, 'local.other') }
     expect(await verifyFrame(auth, deps)).toMatchObject({ ok: false, status: 403 })
   })
 
-  it('исчерпан лимит живых проверок — 429 и в портал не ходим; решение из кэша лимит не тратит', async () => {
+  it('live-check limit exhausted — 429 and no call to the portal; a cached decision does not spend the limit', async () => {
     const kv = await installedKv()
     const call = portal()
     expect(await verifyFrame(auth, { kv, call, appCode: APP, allowLiveCheck: () => false })).toMatchObject({ ok: false, status: 429 })
@@ -98,7 +98,7 @@ describe('verifyFrame', () => {
     expect(allow).toHaveBeenCalledTimes(1)
   })
 
-  it('отвергнутый токен — 401, сбой портала — 502', async () => {
+  it('rejected token — 401, portal failure — 502', async () => {
     const kv = await installedKv()
     expect(await verifyFrame(auth, { kv, appCode: APP, call: async () => {
       throw new Error('expired_token: The access token provided has expired')
@@ -109,7 +109,7 @@ describe('verifyFrame', () => {
     } })).toMatchObject({ status: 502 })
   })
 
-  it('сбой портала не кэшируется: следующий запрос проверяет заново', async () => {
+  it('a portal failure is not cached: the next request checks again', async () => {
     const kv = await installedKv()
     let fail = true
     const call = vi.fn(async (_d: string, _t: string, method: string) => {
@@ -121,7 +121,7 @@ describe('verifyFrame', () => {
     expect(await verifyFrame(auth, { kv, call, appCode: APP })).toMatchObject({ ok: true })
   })
 
-  it('кэширует решение по токену ровно на VERIFY_CACHE_MS', async () => {
+  it('caches the decision for a token for exactly VERIFY_CACHE_MS', async () => {
     const call = portal()
     const kv = await installedKv()
     let now = 1_000
@@ -129,29 +129,29 @@ describe('verifyFrame', () => {
     await verifyFrame(auth, deps)
     now += VERIFY_CACHE_MS - 1
     await verifyFrame(auth, deps)
-    // Два вызова на проверку (profile + app.info), и только одна проверка.
+    // Two calls for the check (profile + app.info), and only one check total.
     expect(call).toHaveBeenCalledTimes(2)
     now += 1
     await verifyFrame(auth, deps)
     expect(call).toHaveBeenCalledTimes(4)
   })
 
-  it('переполнение кэша вытесняет старые записи, а не сбрасывает всё', async () => {
+  it('cache overflow evicts old entries, not the whole cache', async () => {
     const kv = await installedKv()
     const call = portal()
     const deps = { kv, call, appCode: APP, now: () => 1_000 }
     for (let i = 0; i < VERIFY_CACHE_MAX + 1; i++) await verifyFrame({ ...auth, accessToken: `t${i}` }, deps)
     const before = call.mock.calls.length
-    // Свежие токены, записанные ДО переполнения, всё ещё в кэше — полного сброса не было.
+    // Fresh tokens written BEFORE the overflow are still cached — no full reset happened.
     await verifyFrame({ ...auth, accessToken: `t${VERIFY_CACHE_MAX - 1}` }, deps)
     await verifyFrame({ ...auth, accessToken: `t${VERIFY_CACHE_MAX}` }, deps)
     expect(call.mock.calls.length).toBe(before)
-    // Самый старый вытеснен — проверяется заново.
+    // The oldest one was evicted — checked again.
     await verifyFrame({ ...auth, accessToken: 't0' }, deps)
     expect(call.mock.calls.length).toBe(before + 2)
   })
 
-  it('при переполнении сначала снимаются ВСЕ истёкшие записи, свежие не трогаются', async () => {
+  it('on overflow ALL expired entries are dropped first, fresh ones untouched', async () => {
     const kv = await installedKv()
     const call = portal()
     let now = 1_000
@@ -160,26 +160,26 @@ describe('verifyFrame', () => {
     now += VERIFY_CACHE_MS
     for (let i = 0; i < VERIFY_CACHE_MAX / 2; i++) await verifyFrame({ ...auth, accessToken: `new${i}` }, deps)
     await verifyFrame({ ...auth, accessToken: 'trigger' }, deps)
-    // Истёкшая половина снята целиком (а не 10 % по порядку вставки), свежая — вся на месте.
+    // The expired half is dropped entirely (not 10% by insertion order), the fresh half stays intact.
     expect(frameCacheSize()).toBe(VERIFY_CACHE_MAX / 2 + 1)
     const before = call.mock.calls.length
     await verifyFrame({ ...auth, accessToken: 'new0' }, deps)
     expect(call.mock.calls.length).toBe(before)
   })
 
-  it('перепроверенный токен считается свежим при вытеснении (порядок — по последней проверке)', async () => {
+  it('a re-checked token counts as fresh on eviction (order is by last check)', async () => {
     const kv = await installedKv()
     const call = portal()
     let now = 1_000
     const deps = { kv, call, appCode: APP, now: () => now }
     await verifyFrame({ ...auth, accessToken: 'active' }, deps)
-    // Наполнители вставлены позже, но проверены раньше, чем «active» будет перепроверен.
+    // Filler entries are inserted later but checked earlier than "active" gets re-checked.
     now += VERIFY_CACHE_MS / 2
     for (let i = 0; i < VERIFY_CACHE_MAX - 2; i++) await verifyFrame({ ...auth, accessToken: `f${i}` }, deps)
     now += VERIFY_CACHE_MS / 2
-    // Запись «active» истекла — живая проверка; теперь он свежее всех наполнителей.
+    // The "active" entry has expired — live check; now it is fresher than all filler entries.
     await verifyFrame({ ...auth, accessToken: 'active' }, deps)
-    // Переполнение: вытесняются самые давно проверенные — наполнители, а не «active».
+    // Overflow: the entries checked longest ago are evicted — the fillers, not "active".
     await verifyFrame({ ...auth, accessToken: 'x1' }, deps)
     await verifyFrame({ ...auth, accessToken: 'x2' }, deps)
     const before = call.mock.calls.length
@@ -187,7 +187,7 @@ describe('verifyFrame', () => {
     expect(call.mock.calls.length).toBe(before)
   })
 
-  it('isAuthRejection отличает отказ от сбоя', () => {
+  it('isAuthRejection distinguishes rejection from failure', () => {
     expect(isAuthRejection('NO_AUTH_FOUND: Wrong authorization data')).toBe(true)
     expect(isAuthRejection('frame token rejected')).toBe(true)
     expect(isAuthRejection('503 Service Unavailable')).toBe(false)

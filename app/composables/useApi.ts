@@ -1,5 +1,5 @@
-// Запросы к НАШЕМУ серверу (/api) с фрейм-токеном в заголовках. Сервер проверяет токен
-// сам (server/utils/frameAuth.ts) — заголовки здесь лишь сообщают, кто пришёл.
+// Requests to OUR server (/api) with the frame token in the headers. The server verifies
+// the token itself (server/utils/frameAuth.ts) — headers here only say who is calling.
 
 import { tokenNeedsRefresh } from '~/utils/frameToken'
 
@@ -17,11 +17,11 @@ export function useApi() {
     const frame = getOrThrow()
     const current = frame.auth.getAuthData()
     const auth = tokenNeedsRefresh(current) ? await frame.auth.refreshAuth() : current as Exclude<typeof current, false>
-    // `domain` у SDK — с протоколом (getTargetOrigin); сервер вынимает из него хост сам.
+    // The SDK's `domain` includes the protocol (getTargetOrigin); the server extracts the host itself.
     return { 'Authorization': `Bearer ${auth.access_token}`, 'X-B24-Domain': auth.domain }
   }
 
-  /** POST в наш API. Ошибку сервера превращает в {@link ApiError} с его текстом. */
+  /** POST to our API. Turns a server error into {@link ApiError} with its message. */
   async function post<T>(url: string, body: unknown): Promise<T> {
     try {
       const res = await $fetch(url, { method: 'POST', body: body as Record<string, unknown>, headers: await authHeaders() })

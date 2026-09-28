@@ -1,16 +1,16 @@
-# Локальный или серверный запуск одним контейнером. Переменные — в .env (шаблон .env.example).
+# Local or server run as a single container. Variables — in .env (template .env.example).
 services:
   app:
     build: .
     env_file: .env
     ports:
-      # Только локально: HTTPS и доступ снаружи даёт обратный прокси на этом же сервере
-      # (docs/DEPLOY.md). Порт, открытый наружу мимо прокси, позволил бы обойти лимиты по IP.
-      # Прокси на другой машине — замените на "3000:3000" и закройте порт сетевым экраном.
+      # Local only: HTTPS and outside access are provided by a reverse proxy on this same server
+      # (docs/DEPLOY.md). A port exposed outside the proxy would let someone bypass the IP limits.
+      # Proxy on another machine — replace with "3000:3000" and close the port with a firewall.
       - "127.0.0.1:3000:3000"
     volumes:
-      # Токены установки порталов живут здесь; без тома переустановка контейнера их потеряет,
-      # и запись ставок не-администраторами перестанет работать до переустановки приложения.
+      # Portal install tokens live here; without the volume, recreating the container loses them,
+      # and non-admin bid submission stops working until the app is reinstalled.
       - portals:/app/.data
     restart: unless-stopped
 

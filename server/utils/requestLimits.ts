@@ -1,34 +1,36 @@
-// Пределы входящих запросов к /api — защита одного на всех сервера от переполнения памяти и
-// от потока запросов на публичный адрес вебхука (находка отдела безопасности панели: анонимный
-// POST на 15 МБ принимался целиком). Чистые функции; применяет их server/middleware/requestLimits.ts.
+// Incoming /api request limits — protects the one server we all share from memory exhaustion and
+// from a flood of requests against the public webhook address (finding from the panel's security
+// team: an anonymous 15 MB POST was accepted whole). Pure functions; applied by
+// server/middleware/requestLimits.ts.
 
 import type { WindowLimit } from './rateLimit'
 
-/** Тело события портала — PHP-форма в несколько сотен байт; 64 КБ — с большим запасом. */
+/** Portal event body — a PHP-form a few hundred bytes long; 64 KB gives plenty of headroom. */
 export const EVENTS_BODY_LIMIT = 64 * 1024
 /**
- * Прочие POST. Своих POST-обработчиков, кроме событий, на этапе 0 нет; предел — с запасом под
- * запросы BitrixGPT к `completions_url` (этап 1 docs/PLAN.md замерит их размер).
+ * Other POSTs. There are no POST handlers besides events at stage 0; the limit leaves headroom
+ * for BitrixGPT requests to `completions_url` (stage 1 of docs/PLAN.md will measure their size).
  */
 export const API_BODY_LIMIT = 512 * 1024
 
 /**
- * Частота событий установки и удаления с одного адреса (прочие события не считаются —
- * b24EventsHandler.ts). Битрикс24 шлёт их со своих серверов, и лавины установок там не бывает.
+ * Rate of install/uninstall events from one address (other events don't count —
+ * b24EventsHandler.ts). Bitrix24 sends these from its own servers, and floods of installs don't
+ * happen there.
  */
 export const EVENTS_PER_IP: WindowLimit = { max: 60, windowMs: 60_000 }
 /**
- * Общий потолок сверок установки: каждая — исходящий запрос к серверу авторизации с нашими
- * client_id/secret, и поток поддельных установок с тысяч адресов не должен превратиться в поток
- * таких запросов (за злоупотребление Битрикс24 может заблокировать ключи). Списывается прямо
- * перед запросом, после всех проверок: мусор и события удаления его не тратят — иначе поток
- * мусора блокировал бы настоящие удаления (находка /code-review).
+ * Global cap on install verifications: each one is an outgoing request to the authorization
+ * server with our client_id/secret, and a flood of forged installs from thousands of addresses
+ * must not turn into a flood of such requests (Bitrix24 may block our keys for abuse). Charged
+ * right before the request, after all other checks: garbage and uninstall events don't spend it —
+ * otherwise a flood of garbage would block real uninstalls (finding of /code-review).
  */
 export const OAUTH_VERIFY_GLOBAL: WindowLimit = { max: 600, windowMs: 60_000 }
-/** Живых проверок фрейм-токена (вызовов `profile` в чужой портал) с одного IP. */
+/** Live frame-token checks (`profile` calls into someone else's portal) from a single IP. */
 export const FRAME_CHECKS_PER_IP: WindowLimit = { max: 60, windowMs: 60_000 }
 
-/** Предел тела для пути; `null` — путь не ограничиваем (страницы, GET). */
+/** Body limit for a path; `null` — the path is unlimited (pages, GET). */
 export function bodyLimitFor(method: string, path: string): number | null {
   if (method.toUpperCase() !== 'POST' || !path.startsWith('/api/')) return null
   return path.startsWith('/api/b24/events') ? EVENTS_BODY_LIMIT : API_BODY_LIMIT
@@ -37,8 +39,8 @@ export function bodyLimitFor(method: string, path: string): number | null {
 export type BodyVerdict = { ok: true } | { ok: false, status: 411 | 413 }
 
 /**
- * Решение по заголовку `Content-Length`. Без него — 411: и портал, и наша страница его шлют,
- * а тело неизвестной длины пришлось бы читать целиком, чтобы узнать, что оно слишком большое.
+ * Verdict based on the `Content-Length` header. Missing — 411: both the portal and our own page
+ * send it, and a body of unknown length would have to be read in full just to learn it's too big.
  */
 export function checkBodySize(contentLength: string | undefined | null, limit: number): BodyVerdict {
   if (contentLength === undefined || contentLength === null || contentLength.trim() === '') return { ok: false, status: 411 }
@@ -47,7 +49,7 @@ export function checkBodySize(contentLength: string | undefined | null, limit: n
   return n > limit ? { ok: false, status: 413 } : { ok: true }
 }
 
-/** IPv4-mapped IPv6 → IPv4: `::ffff:10.0.0.1` и `::ffff:a00:1` → `10.0.0.1`; прочее — как есть. */
+/** IPv4-mapped IPv6 → IPv4: `::ffff:10.0.0.1` and `::ffff:a00:1` → `10.0.0.1`; everything else is left as-is. */
 function unmapIPv4(ip: string): string {
   const a = ip.trim().toLowerCase()
   if (!a.startsWith('::ffff:')) return a
@@ -60,8 +62,9 @@ function unmapIPv4(ip: string): string {
 }
 
 /**
- * Ключ адреса для лимитов: IPv4 — целиком, IPv6 — сеть /64. Одному клиенту обычно выдают целую
- * /64, и лимит по полному адресу обходился бы перебором адресов внутри неё (находка /code-review).
+ * Address key for rate limits: IPv4 — the full address, IPv6 — the /64 network. A single client
+ * is usually assigned a whole /64, and a limit keyed on the full address could be bypassed by
+ * cycling through addresses within it (finding of /code-review).
  */
 export function ipBucketKey(ip: string): string {
   const a = unmapIPv4(String(ip ?? ''))
@@ -76,8 +79,9 @@ export function ipBucketKey(ip: string): string {
 }
 
 /**
- * Адрес из частной сети: loopback, RFC 1918, CGNAT, link-local, IPv6 ULA (в том числе
- * IPv4-mapped). Только такому соседу — своему прокси, мосту Docker — верим `X-Forwarded-For`.
+ * Whether the address is from a private network: loopback, RFC 1918, CGNAT, link-local, IPv6 ULA
+ * (including IPv4-mapped). Only such a neighbor — our own proxy, a Docker bridge — is trusted
+ * for `X-Forwarded-For`.
  */
 export function isPrivateAddress(ip: string): boolean {
   const a = unmapIPv4(String(ip ?? ''))
@@ -95,21 +99,22 @@ export function isPrivateAddress(ip: string): boolean {
 }
 
 /**
- * IP клиента для лимитов.
+ * Client IP for rate limiting.
  *
- * Без доверенного прокси — адрес сокета. С ним (`TRUST_PROXY=1`) — ПОСЛЕДНИЙ адрес из
- * `X-Forwarded-For`: его дописывает наш прокси, а всё, что левее, прислал клиент. h3
- * (`getRequestIP` с `xForwardedFor`) берёт первый — подделываемый, и лимит обходился бы сменой
- * заголовка. Заголовку верим, только если соединение пришло из частной сети: если порт сервера
- * опубликован наружу, клиент, дошедший мимо прокси, иначе назначал бы себе адрес сам (находка
- * /code-review). Схема рассчитана на ОДИН прокси перед сервером (docs/DEPLOY.md).
+ * Without a trusted proxy — the socket address. With one (`TRUST_PROXY=1`) — the LAST address in
+ * `X-Forwarded-For`: our proxy appends it, and everything to its left came from the client. h3
+ * (`getRequestIP` with `xForwardedFor`) takes the first — spoofable, which would let the limit be
+ * bypassed by changing the header. The header is trusted only if the connection came from a
+ * private network: if the server's port is exposed externally, a client reaching it around the
+ * proxy could otherwise assign itself any address (finding of /code-review). The scheme assumes
+ * exactly ONE proxy in front of the server (docs/DEPLOY.md).
  */
 export function pickClientIp(forwardedFor: string | undefined | null, socketIp: string | undefined | null, trustProxy: boolean): string {
   if (forwardedStatus(forwardedFor, socketIp, trustProxy) === 'used') return lastForwarded(forwardedFor)
   return socketIp || 'unknown'
 }
 
-/** Последний непустой адрес `X-Forwarded-For`; `''` — нет ни одного. */
+/** Last non-empty address in `X-Forwarded-For`; `''` — none present. */
 function lastForwarded(forwardedFor: string | undefined | null): string {
   return String(forwardedFor ?? '').split(',').map(part => part.trim()).filter(Boolean).pop() ?? ''
 }
@@ -117,10 +122,11 @@ function lastForwarded(forwardedFor: string | undefined | null): string {
 export type ForwardedStatus = 'used' | 'ignored' | 'absent'
 
 /**
- * Учтён ли `X-Forwarded-For` для запроса: `used` — да; `ignored` — заголовок есть, но ему не
- * верим (нет `TRUST_PROXY=1` или прокси пришёл не из частной сети — тогда все клиенты делят лимиты
- * адреса прокси); `absent` — заголовка нет. Показывается в `/api/health`: иначе молча
- * игнорируемый заголовок не заметить (находка /code-review).
+ * Whether `X-Forwarded-For` was honored for this request: `used` — yes; `ignored` — the header is
+ * present but not trusted (no `TRUST_PROXY=1`, or the proxy didn't come from a private network —
+ * in which case all clients share the proxy address's limits); `absent` — no header at all.
+ * Exposed via `/api/health`: otherwise a silently ignored header would go unnoticed (finding of
+ * /code-review).
  */
 export function forwardedStatus(forwardedFor: string | undefined | null, socketIp: string | undefined | null, trustProxy: boolean): ForwardedStatus {
   if (!lastForwarded(forwardedFor)) return 'absent'

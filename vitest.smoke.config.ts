@@ -1,8 +1,8 @@
 import { defineConfig } from 'vitest/config'
 import { fileURLToPath } from 'node:url'
 
-// Смок-набор на ТЕСТОВОМ портале (docs/SMOKE.md): ходит в живой портал — поэтому
-// отдельный конфиг, не часть `pnpm test` и CI. Алиасы — как в vitest.config.ts.
+// Smoke suite against a TEST portal (docs/SMOKE.md): hits a live portal, hence a
+// separate config, not part of `pnpm test` or CI. Aliases — same as vitest.config.ts.
 export default defineConfig({
   resolve: {
     alias: {
@@ -15,7 +15,7 @@ export default defineConfig({
     environment: 'node',
     include: ['smoke/**/*.smoke.ts'],
     globalSetup: ['smoke/setup.ts'],
-    // Один портал, общие данные прогона, лимиты REST — файлы по очереди.
+    // A single portal, shared run data, REST limits — files run one at a time.
     fileParallelism: false,
     testTimeout: 180_000,
     hookTimeout: 600_000

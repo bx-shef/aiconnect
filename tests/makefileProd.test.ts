@@ -1,10 +1,10 @@
-// Makefile на сервере (docs/DEPLOY.md): цели `proxy-timeout`, `doctor`, `compose-update` и запуск compose.
+// The server Makefile (docs/DEPLOY.md): targets `proxy-timeout`, `doctor`, `compose-update`, and compose runs.
 //
-// ⚠ Прогоняется НАСТОЯЩИЙ make на тексте Makefile из репозитория, а не его пересказ: у рецептов
-// три слоя экранирования (make → sh → sh внутри контейнера прокси), и копия в тесте разошлась бы с
-// ними молча. docker подменён скриптом в PATH: он пишет вызовы в журнал, а скрипт, который цель
-// выполняет внутри контейнера прокси (`sh -c …`), запускает по-настоящему во временном каталоге
-// вместо корня контейнера — так проверяется и то, что станет с файлом vhost.d.
+// ⚠ This runs the REAL make against the Makefile text from the repo, not a retelling of it: recipes
+// have three layers of escaping (make → sh → sh inside the proxy container), and a copy in the test
+// would silently drift from them. docker is replaced by a script on PATH: it logs calls, and the
+// script the target runs inside the proxy container (`sh -c …`) actually executes in a temp
+// directory instead of the container root — this also verifies what happens to the vhost.d file.
 
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -16,18 +16,19 @@ import { afterEach, describe, expect, it } from 'vitest'
 const ROOT = join(import.meta.dirname, '..')
 const MAKEFILE = readFileSync(join(ROOT, 'Makefile'), 'utf8')
 
-// Подставной docker на node: журнал вызовов, «контейнер прокси» — каталог FAKE_ROOT. Скрипт записи
-// (`exec … sh -c`) и проверки (`exec … grep`) выполняются ПО-НАСТОЯЩЕМУ с теми аргументами, что
-// передала цель, — пути подменяются на FAKE_ROOT. docker-gen повторяет шаблон nginx-proxy: include
-// строится по файлам vhost.d, которые лежат в момент генерации, и `_location_override` хоста
-// вытесняет его `_location`.
+// A stand-in docker on node: logs calls, and the "proxy container" is the FAKE_ROOT directory. The
+// write script (`exec … sh -c`) and the check script (`exec … grep`) run FOR REAL with the arguments
+// the target passed — paths get rewritten to FAKE_ROOT. docker-gen mirrors the nginx-proxy template:
+// include is built from whatever vhost.d files exist at generation time, and a host's
+// `_location_override` takes precedence over its `_location`.
 const FAKE_DOCKER = `#!/usr/bin/env node
 const fs = require('fs'), path = require('path'), cp = require('child_process')
 const a = process.argv.slice(2), env = process.env, R = env.FAKE_ROOT
 fs.appendFileSync(env.DOCKER_LOG, a.join(' ') + '\\n')
 const nl = s => s.replace(/\\\\n/g, '\\n')
-// FAKE_PS — строки «имя образ». \`ps -q\` отдаёт имена вместо ID; образ — через inspect (.Config.Image),
-// а в самом \`ps\` при FAKE_PS_IMAGE_IDS=1 вместо образа виден ID, как после pull нового образа.
+// FAKE_PS — "name image" lines. \`ps -q\` returns names instead of IDs; the image comes from inspect
+// (.Config.Image), while \`ps\` itself shows an ID instead of the image when FAKE_PS_IMAGE_IDS=1, like
+// right after pulling a new image.
 const ps = nl(env.FAKE_PS ?? '').split('\\n').filter(Boolean).map(l => { const [name, image] = l.split(' '); return { name, image } })
 if (a[0] === 'ps') {
   if (a.includes('-q')) process.stdout.write(ps.map(c => c.name + '\\n').join(''))
@@ -71,7 +72,7 @@ if (a[0] === 'compose') {
 }
 if (a[0] === 'exec') {
   const [cmd, ...rest] = a.slice(2)
-  // Скрипт health, который doctor запускает node в контейнере приложения, — настоящий; fetch подменён.
+  // The health script that doctor runs via node inside the app container is real; fetch is stubbed.
   if (cmd === 'node') {
     const stub = 'globalThis.fetch = async () => { const h = process.env.FAKE_HEALTH; if (h === "down") throw new Error("down"); return { ok: true, json: async () => JSON.parse(h) } };'
     process.exit(cp.spawnSync(process.execPath, ['-e', stub + rest[1]], { stdio: 'inherit' }).status ?? 1)
@@ -100,7 +101,7 @@ if (a[0] === 'exec') {
 process.exit(0)
 `
 
-// Хост: curl (скачивание из репозитория и https снаружи), openssl (сертификат), df (диск).
+// Host tools: curl (download from the repo and external https), openssl (certificate), df (disk).
 const FAKE_CURL = `#!/usr/bin/env node
 const fs = require('fs'), a = process.argv.slice(2), env = process.env
 const url = a.find(x => x.startsWith('https://')) ?? ''
@@ -117,8 +118,8 @@ const FAKE_OPENSSL = `#!/usr/bin/env node
 const fs = require('fs'), a = process.argv.slice(2), env = process.env
 const input = fs.readFileSync(0, 'utf8')
 if (a[0] === 's_client') {
-  // Недоверенный сертификат (самоподписанный заглушки nginx-proxy): с проверкой цепочки и имени
-  // рукопожатие обрывается, без неё — сертификат читается, как у настоящего openssl.
+  // Untrusted certificate (nginx-proxy's stub self-signed one): with chain and name verification the
+  // handshake fails; without it, the certificate reads normally, as with real openssl.
   const strict = a.includes('-verify_return_error') && a[a.indexOf('-verify_hostname') + 1] === 'aiconnect.example.by'
   if (env.FAKE_CERT_UNTRUSTED === '1' && strict) process.exit(1)
   process.stdout.write(env.FAKE_CERT ?? '-----BEGIN CERTIFICATE-----\\n')
@@ -134,7 +135,7 @@ echo 'Filesystem 1024-blocks Used Available Capacity Mounted on'
 echo "/dev/sda1 100 50 50 \${FAKE_DF_USED:-42}% /"
 `
 
-// Рядом с прокси — companion обоих поколений: старый образ тоже содержит «nginx-proxy» в имени.
+// Alongside the proxy — companions of both generations: the old image also has "nginx-proxy" in its name.
 const ONE_PROXY = 'nginx-proxy nginxproxy/nginx-proxy:1.7\\nnginx-proxy-acme nginxproxy/acme-companion:2.5\\nletsencrypt jrcs/letsencrypt-nginx-proxy-companion:latest\\naiconnect ghcr.io/bx-shef/aiconnect:latest\\n'
 const VHOST_DIR = '/etc/nginx/vhost.d'
 const FILE = `${VHOST_DIR}/aiconnect.example.by_location`
@@ -149,22 +150,22 @@ interface Run { code: number, out: string, calls: string[], dir: string, root: s
 interface MakeOpts {
   args?: string[]
   env?: Record<string, string>
-  /** Файлы в vhost.d прокси. */
+  /** Files in the proxy's vhost.d. */
   files?: Record<string, string>
-  /** /etc/nginx/conf.d/default.conf прокси. */
+  /** The proxy's /etc/nginx/conf.d/default.conf. */
   conf?: string
   noVhostDir?: boolean
-  /** Файлы рядом с Makefile (каталог на сервере). */
+  /** Files next to the Makefile (the directory on the server). */
   here?: Record<string, string>
-  /** Права файлов из `here`. */
+  /** Permissions for files from `here`. */
   modes?: Record<string, number>
-  /** Утилиты, которых «нет на сервере»: ни подставной, ни настоящей в PATH. */
+  /** Tools that are "missing on the server": neither the stand-in nor the real one on PATH. */
   hide?: string[]
 }
 
 /**
- * Каталог со ссылками на все программы PATH, кроме `hide`, — сервер без curl или openssl. Сам PATH
- * урезать нельзя: в тех же каталогах лежат sh, awk, sed, которые нужны make.
+ * A directory of symlinks to every PATH program except `hide` — a server without curl or openssl.
+ * PATH itself can't just be trimmed: the same directories hold sh, awk, sed, which make needs.
  */
 function pathWithout(hide: string[], into: string): string {
   mkdirSync(into)
@@ -174,7 +175,7 @@ function pathWithout(hide: string[], into: string): string {
       if (hide.includes(name) || existsSync(join(into, name))) continue
       try {
         if (statSync(join(d, name)).isFile()) symlinkSync(join(d, name), join(into, name))
-      } catch { /* битая ссылка в PATH — пропускаем */ }
+      } catch { /* broken symlink on PATH — skip it */ }
     }
   }
   return into
@@ -221,7 +222,7 @@ const proxyTimeout = (opts: Parameters<typeof make>[1] = {}) => make('proxy-time
 const vhostFile = (r: Run) => readFileSync(join(r.root, FILE), 'utf8')
 
 describe('make proxy-timeout', () => {
-  it('домен — из VIRTUAL_HOST контейнера; пишет таймаут, перестраивает конфиг в прокси, приложение не трогает', () => {
+  it('domain comes from the container VIRTUAL_HOST; writes the timeout, rebuilds the proxy config, leaves the app alone', () => {
     const r = proxyTimeout()
     expect(r.code, r.out).toBe(0)
     expect(r.out).toContain('прокси: nginx-proxy, домен: aiconnect.example.by, таймаут: 400s')
@@ -234,29 +235,29 @@ describe('make proxy-timeout', () => {
     const order = ['docker-gen', 'nginx -t', 'nginx -s reload'].map(s => r.calls.findIndex(c => c.includes(s)))
     expect(order).toEqual([...order].sort((a, b) => a - b))
     expect(r.calls.some(c => c.startsWith('compose'))).toBe(false)
-    expect(existsSync(join(r.root, `${FILE}.new`)), 'временный файл убран (mv, не cp)').toBe(false)
+    expect(existsSync(join(r.root, `${FILE}.new`)), 'temp file cleaned up (mv, not cp)').toBe(false)
     expect(r.out).toContain('готово')
   })
 
-  it('vhost.d у прокси ещё нет — каталог создаётся, файл пишется', () => {
+  it('proxy has no vhost.d yet — directory is created, file is written', () => {
     const r = proxyTimeout({ noVhostDir: true })
     expect(r.code, r.out).toBe(0)
     expect(vhostFile(r)).toBe('proxy_read_timeout 400s;\n')
   })
 
-  it('другие директивы в файле сохраняются, старый таймаут заменяется', () => {
+  it('other directives in the file are preserved, old timeout is replaced', () => {
     const r = proxyTimeout({ files: { 'aiconnect.example.by_location': 'client_max_body_size 50m;\nproxy_read_timeout 60s;\n' } })
     expect(r.code, r.out).toBe(0)
     expect(vhostFile(r)).toBe('client_max_body_size 50m;\nproxy_read_timeout 400s;\n')
   })
 
-  it('новый файл начинается с default_location — общие настройки прокси не теряются', () => {
+  it('new file starts from default_location — the proxy shared settings are not lost', () => {
     const r = proxyTimeout({ files: { default_location: 'add_header X-Common 1;\n' } })
     expect(r.code, r.out).toBe(0)
     expect(vhostFile(r)).toBe('add_header X-Common 1;\nproxy_read_timeout 400s;\n')
   })
 
-  it('уже настроено — ничего не пишет и не перестраивает, только мягкий reload', () => {
+  it('already configured — writes and rebuilds nothing, only a soft reload', () => {
     const r = proxyTimeout({
       files: { 'aiconnect.example.by_location': 'proxy_read_timeout 400s;\n' },
       conf: `include ${FILE};\n`
@@ -267,7 +268,7 @@ describe('make proxy-timeout', () => {
     expect(r.calls).toEqual(expect.arrayContaining(['exec nginx-proxy nginx -t', 'exec nginx-proxy nginx -s reload']))
   })
 
-  it('reload упал — ошибка; повторный запуск видит «уже настроено» и перечитывает конфиг', () => {
+  it('reload failed — error; a repeat run sees "already configured" and re-reads the config', () => {
     const first = proxyTimeout({ env: { FAKE_RELOAD: '1' } })
     expect(first.code).not.toBe(0)
     expect(first.out).toContain('повторите make proxy-timeout')
@@ -276,10 +277,10 @@ describe('make proxy-timeout', () => {
       conf: `include ${FILE};\n`,
       env: { FAKE_RELOAD: '1' }
     })
-    expect(again.code, 'и в ветке «уже настроено» провал reload — не успех').not.toBe(0)
+    expect(again.code, 'reload failing is not a success even on the "already configured" branch').not.toBe(0)
   })
 
-  it('наш файл есть, но в конфиге подключён только соседний хост — перестраивает, а не «уже настроено»', () => {
+  it('our file exists, but only a neighbour host is included in the config — rebuilds, not "already configured"', () => {
     const r = proxyTimeout({
       files: { 'aiconnect.example.by_location': 'proxy_read_timeout 400s;\n', 'aiconnectxexample.by_location': 'gzip on;\n' },
       conf: 'include /etc/nginx/vhost.d/aiconnectxexample.by_location;\n'
@@ -289,7 +290,7 @@ describe('make proxy-timeout', () => {
     expect(r.calls).toContain('exec nginx-proxy docker-gen /app/nginx.tmpl /etc/nginx/conf.d/default.conf')
   })
 
-  it('таймаут в файле только в комментарии — это не «уже настроено»', () => {
+  it('timeout in the file is only in a comment — that\'s not "already configured"', () => {
     const r = proxyTimeout({
       files: { 'aiconnect.example.by_location': '#proxy_read_timeout 400s;\n' },
       conf: `include ${FILE};\n`
@@ -299,27 +300,27 @@ describe('make proxy-timeout', () => {
     expect(vhostFile(r)).toBe('#proxy_read_timeout 400s;\nproxy_read_timeout 400s;\n')
   })
 
-  it('nginx -t не прошёл — без reload и с ошибкой', () => {
+  it('nginx -t fails — no reload, and an error', () => {
     const r = proxyTimeout({ env: { FAKE_NGINX_T: '1' } })
     expect(r.code).not.toBe(0)
     expect(r.calls.some(c => c.includes('reload'))).toBe(false)
     expect(r.out).toContain('не перестроен')
   })
 
-  it('для домена есть _location_override — файл не подключён: ошибка, а не «готово»', () => {
-    // Соседний хост, отличающийся от нашего одной буквой на месте точки: подстрока или регулярное
-    // выражение вместо точной строки include приняли бы его include за наш.
+  it('domain has a _location_override — file not included: error, not "готово"', () => {
+    // A neighbour host that differs from ours by one character in place of the dot: a substring or
+    // regex match instead of an exact include string would mistake its include for ours.
     const r = proxyTimeout({ files: { 'aiconnect.example.by_location_override': 'return 503;\n', 'aiconnectxexample.by_location': 'gzip on;\n' } })
     expect(r.code).not.toBe(0)
     expect(r.out).toContain('не подключён')
   })
 
-  it('vhost.d прокси не отдельный том — предупреждает', () => {
+  it('proxy vhost.d is not a separate volume — warns', () => {
     const r = proxyTimeout({ env: { FAKE_MOUNTED: '0' } })
     expect(r.out).toContain('не отдельный том')
   })
 
-  it('контейнер приложения не запущен — просит make prod-up', () => {
+  it('app container is not running — asks for make prod-up', () => {
     const r = proxyTimeout({ env: { FAKE_VHOST: '' } })
     expect(r.code).not.toBe(0)
     expect(r.out).toContain('сначала make prod-up')
@@ -327,23 +328,23 @@ describe('make proxy-timeout', () => {
   })
 
   it.each([
-    ['нет прокси', 'watchtower containrrr/watchtower\\n', 0],
-    ['только образы, похожие на прокси по имени', 'dash someone/nginx-proxy-dashboard:1\\nle jrcs/letsencrypt-nginx-proxy-companion\\n', 0],
-    ['два прокси', 'p1 nginxproxy/nginx-proxy\\np2 jwilder/nginx-proxy\\n', 2]
-  ])('%s — просит PROXY=<имя> и ничего не пишет', (_label, ps, n) => {
+    ['no proxy', 'watchtower containrrr/watchtower\\n', 0],
+    ['only images that merely look like a proxy by name', 'dash someone/nginx-proxy-dashboard:1\\nle jrcs/letsencrypt-nginx-proxy-companion\\n', 0],
+    ['two proxies', 'p1 nginxproxy/nginx-proxy\\np2 jwilder/nginx-proxy\\n', 2]
+  ])('%s — asks for PROXY=<name> and writes nothing', (_label, ps, n) => {
     const r = proxyTimeout({ env: { FAKE_PS: ps } })
     expect(r.code).not.toBe(0)
     expect(r.out).toContain(`контейнеров nginx-proxy найдено: ${n}. Укажите нужный: make proxy-timeout PROXY=<имя>`)
     expect(r.calls).toEqual([])
   })
 
-  it('после pull нового образа docker ps показывает ID вместо имени — прокси всё равно находится (образ из inspect)', () => {
+  it('after pulling a new image, docker ps shows an ID instead of a name — proxy is still found (image from inspect)', () => {
     const r = proxyTimeout({ env: { FAKE_PS_IMAGE_IDS: '1' } })
     expect(r.code, r.out).toBe(0)
     expect(r.out).toContain('прокси: nginx-proxy, домен: aiconnect.example.by')
   })
 
-  it('PROXY=<опечатка> — контейнера нет или он не запущен: так и говорит, ничего не делает', () => {
+  it('PROXY=<typo> — container missing or not running: says so, does nothing', () => {
     const r = proxyTimeout({ args: ['PROXY=nginx-prxy'], env: { FAKE_NOT_RUNNING: 'nginx-prxy' } })
     expect(r.code).not.toBe(0)
     expect(r.out).toContain('контейнер прокси nginx-prxy не запущен или такого нет')
@@ -352,19 +353,19 @@ describe('make proxy-timeout', () => {
     expect(failures(d)).toEqual([expect.stringContaining('контейнер прокси nginx-prxy не запущен или такого нет')])
   })
 
-  it('прокси — только образ с именем ровно nginx-proxy: соседский nginx-proxy-dashboard не в счёт', () => {
+  it('proxy is only an image named exactly nginx-proxy: a neighbouring nginx-proxy-dashboard doesn\'t count', () => {
     const r = proxyTimeout({ env: { FAKE_PS: `dash someone/nginx-proxy-dashboard:1\\n${ONE_PROXY}` } })
     expect(r.code, r.out).toBe(0)
     expect(r.out).toContain('прокси: nginx-proxy, домен: aiconnect.example.by')
   })
 
-  it('PROXY=<имя> и PROXY_TIMEOUT=… из командной строки — берутся', () => {
+  it('PROXY=<name> and PROXY_TIMEOUT=… from the command line — are taken', () => {
     const r = proxyTimeout({ args: ['PROXY=edge-proxy', 'PROXY_TIMEOUT=600s'], env: { FAKE_PS: '' } })
     expect(r.code, r.out).toBe(0)
     expect(r.out).toContain('прокси: edge-proxy, домен: aiconnect.example.by, таймаут: 600s')
   })
 
-  it('контейнер приложения не подменить ни командной строкой, ни MAKEFLAGS', () => {
+  it('app container cannot be substituted via the command line or MAKEFLAGS', () => {
     for (const r of [
       proxyTimeout({ args: ['APP_CONTAINER=evil'] }),
       proxyTimeout({ env: { MAKEFLAGS: 'APP_CONTAINER=evil' } })
@@ -375,7 +376,7 @@ describe('make proxy-timeout', () => {
     }
   })
 
-  it('PROXY и PROXY_TIMEOUT из окружения оболочки — не берутся, даже с make-функцией внутри', () => {
+  it('PROXY and PROXY_TIMEOUT from the shell environment — not taken, even with a make function inside', () => {
     for (const env of [{ PROXY: 'http://10.0.0.1:3128', PROXY_TIMEOUT: '1s' }, { PROXY: '$(shell touch PWNED)', PROXY_TIMEOUT: '$(shell touch PWNED)' }]) {
       const r = proxyTimeout({ env })
       expect(r.code, r.out).toBe(0)
@@ -384,19 +385,19 @@ describe('make proxy-timeout', () => {
     }
   })
 
-  // Находки ревью безопасности на #16: значения не должны становиться командами ни на хосте, ни в прокси.
+  // Findings from the security review in #16: values must not become commands, on the host or in the proxy.
   it.each([
-    ['подстановка команды в VIRTUAL_HOST', { env: { FAKE_VHOST: 'x$(touch PWNED)y.by' } }],
-    ['выход из vhost.d', { env: { FAKE_VHOST: '../../etc/nginx/nginx.conf' } }],
-    ['несколько доменов через запятую', { env: { FAKE_VHOST: 'a.by,b.by' } }],
-    ['кавычка и команда в таймауте', { args: ['PROXY_TIMEOUT=1s\'; touch PWNED; echo \''] }],
-    ['перевод строки в таймауте', { args: ['PROXY_TIMEOUT=400s\n\'; touch PWNED; echo \''] }],
-    ['таймаут без числа', { args: ['PROXY_TIMEOUT=long'] }],
-    ['странное имя прокси', { args: ['PROXY=p;touch PWNED'] }],
-    // make сам выполнил бы $(shell …) из значения ещё до оболочки, если бы брал его не как текст.
-    ['make-функция в таймауте', { args: ['PROXY_TIMEOUT=$(shell touch PWNED)'] }],
-    ['make-функция в имени прокси', { args: ['PROXY=$(shell touch PWNED)'] }]
-  ])('%s — отказ до любой записи', (_label, opts) => {
+    ['command substitution in VIRTUAL_HOST', { env: { FAKE_VHOST: 'x$(touch PWNED)y.by' } }],
+    ['escaping vhost.d', { env: { FAKE_VHOST: '../../etc/nginx/nginx.conf' } }],
+    ['several comma-separated domains', { env: { FAKE_VHOST: 'a.by,b.by' } }],
+    ['quote and command in the timeout', { args: ['PROXY_TIMEOUT=1s\'; touch PWNED; echo \''] }],
+    ['newline in the timeout', { args: ['PROXY_TIMEOUT=400s\n\'; touch PWNED; echo \''] }],
+    ['timeout without a number', { args: ['PROXY_TIMEOUT=long'] }],
+    ['odd proxy name', { args: ['PROXY=p;touch PWNED'] }],
+    // make itself would run $(shell …) from the value before the shell, if it didn't take it as text.
+    ['make function in the timeout', { args: ['PROXY_TIMEOUT=$(shell touch PWNED)'] }],
+    ['make function in the proxy name', { args: ['PROXY=$(shell touch PWNED)'] }]
+  ])('%s — refused before any write', (_label, opts) => {
     const r = proxyTimeout(opts)
     expect(r.code).not.toBe(0)
     expect(r.calls).toEqual([])
@@ -405,8 +406,8 @@ describe('make proxy-timeout', () => {
   })
 })
 
-describe('make proxy-timeout: перевод строки в VIRTUAL_HOST', () => {
-  it('берётся первая строка, хвост командой не становится', () => {
+describe('make proxy-timeout: newline in VIRTUAL_HOST', () => {
+  it('takes the first line; the rest does not become a command', () => {
     const r = proxyTimeout({ env: { FAKE_VHOST: 'aiconnect.example.by\\nx; touch PWNED; y.by' } })
     expect(r.out).toContain('домен: aiconnect.example.by,')
     expect(existsSync(join(r.dir, 'PWNED'))).toBe(false)
@@ -414,19 +415,19 @@ describe('make proxy-timeout: перевод строки в VIRTUAL_HOST', () =
   })
 })
 
-describe('compose на сервере берёт окружение только из ./.env', () => {
-  it('DOMAIN и ключ шифрования из оболочки до compose не доходят', () => {
+describe('on the server, compose takes its environment only from ./.env', () => {
+  it('DOMAIN and the encryption key from the shell do not reach compose', () => {
     const r = make('prod-up', { env: { DOMAIN: 'bank-import.example.by', B24_TOKEN_ENC_KEY: 'neighbour' } })
     expect(r.code, r.out).toBe(0)
     expect(r.calls).toContain('compose-env DOMAIN=unset KEY=unset')
   })
 
-  it('DOMAIN=… в командной строке make тоже не доходит', () => {
+  it('DOMAIN=… on the make command line doesn\'t reach it either', () => {
     const r = make('prod-up', { args: ['DOMAIN=bank-import.example.by'] })
     expect(r.calls).toContain('compose-env DOMAIN=unset KEY=unset')
   })
 
-  it('имя контейнера в Makefile совпадает с container_name в docker-compose.prod.yml', () => {
+  it('container name in the Makefile matches container_name in docker-compose.prod.yml', () => {
     const name = /^override APP_CONTAINER := (\S+)$/m.exec(MAKEFILE)?.[1]
     const compose = readFileSync(join(ROOT, 'docker-compose.prod.yml'), 'utf8')
     expect(name).toBeTruthy()
@@ -435,8 +436,9 @@ describe('compose на сервере берёт окружение только
 })
 
 // ─── make doctor ──────────────────────────────────────────────────────
-// Здоровый сервер: прокси, Watchtower и приложение запущены; upstream без keepalive, таймаут подключён,
-// health отвечает изнутри и снаружи, сертификат свежий, диск свободен. Каждый тест ломает одно.
+// A healthy server: proxy, Watchtower and the app are running; upstream has no keepalive, the timeout
+// is wired up, health responds from inside and outside, the certificate is fresh, disk is free. Each
+// test breaks one thing.
 const SHA = 'a8f2ef2b57059e518ff1f14a880dcee79dd41d00'
 const HEALTH = (config: Record<string, boolean> = {}) => JSON.stringify({
   ok: true,
@@ -447,7 +449,7 @@ const HEALTH = (config: Record<string, boolean> = {}) => JSON.stringify({
 const UPSTREAM = (extra = '') => `upstream aiconnect.example.by {\n    # Container: aiconnect\n    server 172.18.0.14:3000;\n${extra}}\n`
 const HEALTHY: MakeOpts = {
   env: {
-    // Имя без «watchtower»: Watchtower узнаётся по образу, а не по имени контейнера.
+    // A name without "watchtower": Watchtower is recognized by its image, not the container name.
     FAKE_PS: `${ONE_PROXY}wt containrrr/watchtower:latest\\n`,
     FAKE_HEALTH: HEALTH(),
     FAKE_EXT: HEALTH()
@@ -464,7 +466,7 @@ const doctor = (patch: MakeOpts = {}) => make('doctor', {
 const failures = (r: Run) => r.out.split('\n').filter(l => l.startsWith('  ✗'))
 
 describe('make doctor', () => {
-  it('здоровый сервер — все проверки ✓, код 0; сборка — первые 7 знаков коммита', () => {
+  it('healthy server — all checks ✓, code 0; build shown as the first 7 commit chars', () => {
     const r = doctor()
     expect(r.code, r.out).toBe(0)
     expect(failures(r)).toEqual([])
@@ -483,102 +485,102 @@ describe('make doctor', () => {
     expect(r.out).toContain('[make] всё в порядке')
   })
 
-  it('только читает: ни записи в прокси, ни перезапуска прокси или приложения', () => {
+  it('read-only: no writes to the proxy, no restarting the proxy or the app', () => {
     const r = doctor()
     const actions = r.calls.filter(c => !c.startsWith('curl '))
     expect(actions.every(c => /^(exec (aiconnect node -e |nginx-proxy cat \/etc\/nginx\/)|info -f )/.test(c)), actions.join('\n')).toBe(true)
   })
 
-  it('upstream прокси с keepalive — ✗ и код 1: это сегодняшний 502', () => {
+  it('proxy upstream with keepalive — ✗ and code 1: this is today\'s 502', () => {
     const r = doctor({ conf: `${UPSTREAM('    keepalive 2;\n')}server { include ${FILE}; }\n` })
     expect(r.code).not.toBe(0)
     expect(failures(r)).toEqual([expect.stringContaining('прокси nginx-proxy держит соединения с приложением (keepalive)')])
   })
 
-  it('keepalive соседнего хоста — не наш: upstream ищется по точному имени домена', () => {
+  it('keepalive on a neighbour host is not ours: upstream is looked up by exact domain name', () => {
     const neighbour = 'upstream aiconnectxexample.by {\n    server 172.18.0.9:3000;\n    keepalive 2;\n}\n'
     const r = doctor({ conf: `${neighbour}${UPSTREAM()}server { include ${FILE}; }\n` })
     expect(failures(r)).toEqual([])
   })
 
-  it('нет метки keepalive=disabled — ✗ со ссылкой на compose-update', () => {
+  it('missing the keepalive=disabled label — ✗ pointing to compose-update', () => {
     const r = doctor({ env: { FAKE_KEEPALIVE: '' } })
     expect(r.code).not.toBe(0)
     expect(failures(r)).toEqual([expect.stringContaining('→ make compose-update, затем make prod-up')])
   })
 
-  it('в upstream только заглушка «down» — прокси не видит приложение: ✗, а не ложный ✓ про keepalive', () => {
+  it('upstream has only a "down" stub — proxy can\'t see the app: ✗, not a false ✓ about keepalive', () => {
     const conf = `upstream aiconnect.example.by {\n    # Fallback entry\n    server 127.0.0.1 down;\n}\nserver { include ${FILE}; }\n`
     const r = doctor({ conf })
     expect(failures(r)).toEqual([expect.stringContaining('нет рабочего сервера')])
   })
 
-  it('upstream с отступами и пробелами в конце строк — разбирается так же', () => {
+  it('upstream with indentation and trailing whitespace — parsed the same way', () => {
     const conf = `  upstream aiconnect.example.by {  \r\n\tserver 172.18.0.14:3000;\r\n\tkeepalive 2;\r\n  }\r\nserver { include ${FILE}; }\n`
     const r = doctor({ conf })
     expect(failures(r)).toEqual([expect.stringContaining('держит соединения с приложением (keepalive)')])
   })
 
-  it('upstream нашего домена в конфиге нет — ✗', () => {
+  it('no upstream for our domain in the config — ✗', () => {
     const r = doctor({ conf: `server { include ${FILE}; }\n` })
     expect(failures(r)).toEqual([expect.stringContaining('нет upstream aiconnect.example.by')])
   })
 
   it.each([
-    ['файла таймаута нет', { files: {} }],
-    ['таймаут только в комментарии', { files: { 'aiconnect.example.by_location': '#proxy_read_timeout 400s;\n' } }],
-    ['файл есть, но не подключён', { conf: UPSTREAM() }]
-  ])('%s — ✗ и совет make proxy-timeout', (_label, patch) => {
+    ['no timeout file', { files: {} }],
+    ['timeout only in a comment', { files: { 'aiconnect.example.by_location': '#proxy_read_timeout 400s;\n' } }],
+    ['file exists but not included', { conf: UPSTREAM() }]
+  ])('%s — ✗ and a make proxy-timeout suggestion', (_label, patch) => {
     const r = doctor(patch as MakeOpts)
     expect(r.code).not.toBe(0)
     expect(failures(r)).toEqual([expect.stringContaining('→ make proxy-timeout')])
   })
 
-  it('контейнера нет — один ✗ и стоп: остальное проверять не на чем', () => {
+  it('no container — one ✗ and stop: nothing left to check', () => {
     const r = doctor({ env: { FAKE_STATE: '' } })
     expect(r.code).not.toBe(0)
     expect(failures(r)).toEqual(['  ✗ контейнера aiconnect нет → make prod-up'])
     expect(r.calls).toEqual([])
   })
 
-  it('контейнер нездоров — ✗ с его состоянием', () => {
+  it('container unhealthy — ✗ with its state', () => {
     const r = doctor({ env: { FAKE_STATE: 'running unhealthy' } })
     expect(failures(r)).toEqual(['  ✗ контейнер aiconnect: running unhealthy → make logs'])
   })
 
-  it('health: незаданное в .env — ✗ с именем переменной и сборкой', () => {
+  it('health: unset in .env — ✗ with the variable name and the build', () => {
     const r = doctor({ env: { FAKE_HEALTH: HEALTH({ appCode: false, oauth: false }) } })
     expect(failures(r)).toEqual([`  ✗ не задано в .env: B24_CLIENT_ID/B24_CLIENT_SECRET,B24_APP_CODE → вписать и make prod-up (таблица переменных — docs/DEPLOY.md); сборка ${SHA.slice(0, 7)}`])
     expect(r.out).not.toContain('✓ настройки сервера заданы')
   })
 
-  it('неизвестный флаг health (сервер новее Makefile) — ✗ с именем флага, а не молчание', () => {
+  it('unknown health flag (server newer than the Makefile) — ✗ with the flag name, not silence', () => {
     const r = doctor({ env: { FAKE_HEALTH: HEALTH({ newFlag: false }) } })
     expect(failures(r)).toEqual([expect.stringContaining('не задано в .env: newFlag')])
   })
 
-  it('TRUST_PROXY задаёт compose-файл, а не .env — совет про compose-update', () => {
+  it('TRUST_PROXY is set by the compose file, not .env — suggests compose-update', () => {
     const r = doctor({ env: { FAKE_HEALTH: HEALTH({ trustProxy: false }) } })
     expect(failures(r)).toEqual([expect.stringContaining('не задано в docker-compose.prod.yml: TRUST_PROXY → make compose-update')])
     expect(r.out).not.toContain('✓ настройки сервера заданы')
   })
 
-  it('health изнутри не ответил — ✗', () => {
+  it('health from inside did not respond — ✗', () => {
     const r = doctor({ env: { FAKE_HEALTH: 'down' } })
     expect(failures(r)).toEqual([expect.stringContaining('/api/health изнутри контейнера не ответил')])
   })
 
-  it('https снаружи не отвечает — ✗ с ошибкой curl', () => {
+  it('https from outside does not respond — ✗ with the curl error', () => {
     const r = doctor({ env: { FAKE_EXT: undefined as unknown as string } })
     expect(failures(r)).toEqual([expect.stringContaining('https://aiconnect.example.by/api/health не ответил: curl: (7)')])
   })
 
-  it('ответ снаружи с пробелами в JSON (DEBUG) — адрес клиента всё равно виден', () => {
+  it('external response with whitespace in the JSON (DEBUG) — client address still visible', () => {
     const r = doctor({ env: { FAKE_EXT: JSON.stringify(JSON.parse(HEALTH()), null, 2) } })
     expect(failures(r)).toEqual([])
   })
 
-  it('на сервере нет curl и openssl — ⚠ «не проверено», а не молчаливое «всё в порядке»', () => {
+  it('server has neither curl nor openssl — ⚠ "not checked", not a silent "all fine"', () => {
     const r = doctor({ hide: ['curl', 'openssl'] })
     expect(r.code, r.out).toBe(0)
     expect(r.out).toContain('⚠ https не проверен: на сервере нет curl')
@@ -586,53 +588,53 @@ describe('make doctor', () => {
     expect(r.out).toContain('[make] ошибок нет, предупреждений: 2')
   })
 
-  it('снаружи отвечает, но адрес клиента не виден — ✗', () => {
+  it('responds from outside, but the client address isn\'t visible — ✗', () => {
     const r = doctor({ env: { FAKE_EXT: HEALTH().replace('"used"', '"absent"') } })
     expect(failures(r)).toEqual([expect.stringContaining('forwardedFor не used')])
   })
 
   it.each([
-    ['истекает меньше чем через 14 дней', { FAKE_CERT_SOON: '1' }, 'истекает меньше чем через 14 дней'],
-    ['не прочитан', { FAKE_CERT: '' }, 'не прочитан'],
-    ['самоподписанный (Let\'s Encrypt ещё не выпустил) — срок у него большой, но он не доверенный', { FAKE_CERT_UNTRUSTED: '1' }, 'не доверенный']
-  ])('сертификат %s — ✗', (_label, env, text) => {
+    ['expiring in less than 14 days', { FAKE_CERT_SOON: '1' }, 'истекает меньше чем через 14 дней'],
+    ['unreadable', { FAKE_CERT: '' }, 'не прочитан'],
+    ['self-signed (Let\'s Encrypt hasn\'t issued one yet) — long-lived, but untrusted', { FAKE_CERT_UNTRUSTED: '1' }, 'не доверенный']
+  ])('certificate %s — ✗', (_label, env, text) => {
     const r = doctor({ env })
     expect(failures(r)).toEqual([expect.stringContaining(text)])
   })
 
-  it('после pull новых образов docker ps показывает ID — прокси и Watchtower всё равно находятся', () => {
+  it('after pulling new images docker ps shows IDs — proxy and Watchtower are still found', () => {
     const r = doctor({ env: { FAKE_PS_IMAGE_IDS: '1' } })
     expect(r.code, r.out).toBe(0)
     expect(failures(r)).toEqual([])
   })
 
-  it('образ, лишь похожий на Watchtower по имени (watchtower-ui), — не Watchtower', () => {
+  it('an image merely named like Watchtower (watchtower-ui) is not Watchtower', () => {
     const r = doctor({ env: { FAKE_PS: `${ONE_PROXY}wtui someone/watchtower-ui:1\\n` } })
     expect(failures(r)).toEqual([expect.stringContaining('Watchtower не запущен')])
   })
 
-  it('Watchtower не запущен — ✗', () => {
+  it('Watchtower is not running — ✗', () => {
     const r = doctor({ env: { FAKE_PS: ONE_PROXY } })
     expect(failures(r)).toEqual([expect.stringContaining('Watchtower не запущен')])
   })
 
-  it('диск занят на 90 % и больше — ✗; каталог — тот, что называет docker', () => {
+  it('disk 90% full or more — ✗; the directory is the one docker names', () => {
     const r = doctor({ env: { FAKE_DF_USED: '95', FAKE_DOCKER_ROOT: '/srv/docker' } })
     expect(failures(r)).toEqual([expect.stringContaining('диск docker (/srv/docker) занят на 95%')])
   })
 
-  it.each([['89', true], ['90', false]])('диск занят на %s%% — граница 90 %%', (used, fine) => {
+  it.each([['89', true], ['90', false]])('disk %s%% full — the 90%% boundary', (used, fine) => {
     const r = doctor({ env: { FAKE_DF_USED: used } })
     expect(failures(r)).toEqual(fine ? [] : [expect.stringContaining(`занят на ${used}%`)])
   })
 
-  it('df не ответил — ⚠ «не проверено»', () => {
+  it('df did not respond — ⚠ "not checked"', () => {
     const r = doctor({ env: { FAKE_DF_USED: 'none' } })
     expect(r.code, r.out).toBe(0)
     expect(r.out).toContain('⚠ место на диске не проверено')
   })
 
-  it('два прокси — ✗ с просьбой PROXY=<имя>, остальные проверки идут; PROXY из командной строки берётся', () => {
+  it('two proxies — ✗ asking for PROXY=<name>, other checks still run; PROXY from the command line is taken', () => {
     const two = `p1 nginxproxy/nginx-proxy\\np2 jwilder/nginx-proxy\\nwatchtower containrrr/watchtower\\n`
     const r = doctor({ env: { FAKE_PS: two } })
     expect(failures(r)).toEqual([expect.stringContaining('найдено: 2. Укажите нужный: make doctor PROXY=<имя>')])
@@ -641,7 +643,7 @@ describe('make doctor', () => {
     expect(chosen.out).toContain('✓ прокси p1 ходит в приложение без keepalive')
   })
 
-  it('подстановка команды в VIRTUAL_HOST — ✗ домена, в прокси и наружу не ходит', () => {
+  it('command substitution in VIRTUAL_HOST — ✗ for the domain, never reaches the proxy or outside', () => {
     const r = doctor({ env: { FAKE_VHOST: 'x$(touch PWNED)y.by' } })
     expect(r.code).not.toBe(0)
     expect(failures(r)).toEqual([expect.stringContaining('не похож на один домен')])
@@ -660,7 +662,7 @@ describe('make compose-update', () => {
   const leftovers = (r: Run) => readdirSync(r.dir).filter(f => f.startsWith('.docker-compose.prod.yml.'))
   const backups = (r: Run) => readdirSync(r.dir).filter(f => f.startsWith('docker-compose.prod.yml.bak-'))
 
-  it('без CONFIRM — показывает разницу и готовую команду с sha256 показанного, файл не трогает', () => {
+  it('without CONFIRM — shows the diff and the ready-made command with the sha256 shown, leaves the file alone', () => {
     const r = update({ env: { FAKE_DL: NEW } })
     expect(r.code, r.out).toBe(0)
     expect(r.out).toContain('+      - "com.github.nginx-proxy.nginx-proxy.keepalive=disabled"')
@@ -669,7 +671,7 @@ describe('make compose-update', () => {
     expect(leftovers(r)).toEqual([])
   })
 
-  it('CONFIRM=<sha256 показанного> — заменяет, копия прежнего рядом; compose проверял без DOMAIN из оболочки', () => {
+  it('CONFIRM=<sha256 shown> — replaces, previous copy stays alongside; compose checked without DOMAIN from the shell', () => {
     const r = update({ env: { FAKE_DL: NEW, DOMAIN: 'bank-import.example.by' }, args: [`CONFIRM=${sha(NEW)}`] })
     expect(r.code, r.out).toBe(0)
     expect(current(r)).toBe(NEW)
@@ -681,28 +683,28 @@ describe('make compose-update', () => {
     expect(leftovers(r)).toEqual([])
   })
 
-  it('права файла при замене остаются прежними', () => {
+  it('file permissions stay the same after the replace', () => {
     const r = update({ env: { FAKE_DL: NEW }, args: [`CONFIRM=${sha(NEW)}`], modes: { 'docker-compose.prod.yml': 0o640 } })
     expect(r.code, r.out).toBe(0)
     expect(current(r)).toBe(NEW)
     expect(statSync(join(r.dir, 'docker-compose.prod.yml')).mode & 0o777).toBe(0o640)
   })
 
-  it('в ветке появился коммит после показа — sha256 другой: отказ, файл не тронут', () => {
-    const r = update({ env: { FAKE_DL: `${NEW}# новый коммит\n` }, args: [`CONFIRM=${sha(NEW)}`] })
+  it('a commit landed on the branch after the show — sha256 differs: refused, file untouched', () => {
+    const r = update({ env: { FAKE_DL: `${NEW}# new commit\n` }, args: [`CONFIRM=${sha(NEW)}`] })
     expect(r.code).not.toBe(0)
     expect(r.out).toContain('файл в main изменился после показа')
-    expect(r.out).toContain(`make compose-update CONFIRM=${sha(`${NEW}# новый коммит\n`)}`)
+    expect(r.out).toContain(`make compose-update CONFIRM=${sha(`${NEW}# new commit\n`)}`)
     expect(current(r)).toBe(OLD)
     expect(backups(r)).toEqual([])
     expect(leftovers(r)).toEqual([])
   })
 
   it.each([
-    ['«1» вместо sha256', '1'],
-    ['make-функция', '$(shell touch PWNED)'],
-    ['кавычка и команда', 'a";touch PWNED;echo "']
-  ])('CONFIRM=%s — отказ до скачивания', (_label, CONFIRM) => {
+    ['"1" instead of sha256', '1'],
+    ['make function', '$(shell touch PWNED)'],
+    ['quote and command', 'a";touch PWNED;echo "']
+  ])('CONFIRM=%s — refused before downloading', (_label, CONFIRM) => {
     const r = update({ env: { FAKE_DL: NEW }, args: [`CONFIRM=${CONFIRM}`] })
     expect(r.code).not.toBe(0)
     expect(r.out).toContain('CONFIRM — 12 знаков sha256')
@@ -711,13 +713,13 @@ describe('make compose-update', () => {
     expect(existsSync(join(r.dir, 'PWNED'))).toBe(false)
   })
 
-  it('CONFIRM из окружения оболочки — не считается', () => {
+  it('CONFIRM from the shell environment — does not count', () => {
     const r = update({ env: { FAKE_DL: NEW, CONFIRM: sha(NEW) } })
     expect(r.code, r.out).toBe(0)
     expect(current(r)).toBe(OLD)
   })
 
-  it('файл уже как в репозитории — так и говорит', () => {
+  it('file already matches the repo — says so', () => {
     const r = update({ env: { FAKE_DL: OLD }, args: [`CONFIRM=${sha(OLD)}`] })
     expect(r.code, r.out).toBe(0)
     expect(r.out).toContain(`уже как в main (sha256 ${sha(OLD)})`)
@@ -725,7 +727,7 @@ describe('make compose-update', () => {
     expect(leftovers(r)).toEqual([])
   })
 
-  it('compose-файла ещё нет — показывает, а с CONFIRM ставит его без копии и с обычными правами', () => {
+  it('no compose file yet — shows it, and with CONFIRM installs it with no backup and normal permissions', () => {
     const look = make('compose-update', { env: { FAKE_DL: NEW } })
     expect(look.code, look.out).toBe(0)
     expect(look.out).toContain('здесь ещё нет')
@@ -734,15 +736,15 @@ describe('make compose-update', () => {
     expect(put.code, put.out).toBe(0)
     expect(readFileSync(join(put.dir, 'docker-compose.prod.yml'), 'utf8')).toBe(NEW)
     expect(put.out).toContain('копия прежнего: нет')
-    // У mktemp права только владельцу; файл для compose должен читаться, как обычный (umask теста).
+    // mktemp gives owner-only permissions; the compose file should be readable normally (test's umask).
     expect(statSync(join(put.dir, 'docker-compose.prod.yml')).mode & 0o044).not.toBe(0)
   })
 
   it.each([
-    ['не скачался', {}],
-    ['скачалась не compose-страница (404 и т. п.)', { FAKE_DL: '404: Not Found' }],
-    ['compose его не принял', { FAKE_DL: NEW, FAKE_CONFIG: '1' }]
-  ])('%s — ошибка, рабочий файл не тронут', (_label, env) => {
+    ['download failed', {}],
+    ['downloaded a non-compose page (404 etc.)', { FAKE_DL: '404: Not Found' }],
+    ['compose rejected it', { FAKE_DL: NEW, FAKE_CONFIG: '1' }]
+  ])('%s — error, working file untouched', (_label, env) => {
     const r = update({ env, args: [`CONFIRM=${sha(NEW)}`] })
     expect(r.code).not.toBe(0)
     expect(r.out).toContain('рабочий не тронут')
@@ -750,19 +752,20 @@ describe('make compose-update', () => {
     expect(leftovers(r)).toEqual([])
   })
 
-  it('REF=<ветка> — берёт файл из неё', () => {
+  it('REF=<branch> — takes the file from it', () => {
     const r = update({ env: { FAKE_DL: NEW }, args: ['REF=claude/some-branch'] })
     expect(r.calls).toContain('curl https://raw.githubusercontent.com/bx-shef/aiconnect/claude/some-branch/docker-compose.prod.yml')
   })
 })
 
-// ─── REF: compose-update и self-update ────────────────────────────────
-// Находка безопасности и тестировщика на #16: REF подставлялся в команду текстом и брался из
-// окружения — `REF='a";touch PWNED;echo "'` выполнял команду на хосте, а `$(shell …)` — ещё make.
-describe('REF у compose-update и self-update', () => {
+// ─── REF: compose-update and self-update ──────────────────────────────
+// A security and testing finding from #16: REF used to be inserted into the command as text and
+// taken from the environment — `REF='a";touch PWNED;echo "'` ran a command on the host, and
+// `$(shell …)` ran one in make itself.
+describe('REF for compose-update and self-update', () => {
   const RAW = 'https://raw.githubusercontent.com/bx-shef/aiconnect'
 
-  it.each(['compose-update', 'self-update'])('%s: REF из окружения оболочки — не берётся, даже с make-функцией', (target) => {
+  it.each(['compose-update', 'self-update'])('%s: REF from the shell environment — not taken, even with a make function', (target) => {
     for (const REF of ['feature-x', '$(shell touch PWNED)']) {
       const r = make(target, { env: { REF }, here: { 'docker-compose.prod.yml': 'services: {}\n' } })
       expect(r.calls.find(c => c.startsWith('curl '))).toMatch(new RegExp(`^curl ${RAW}/main/`))
@@ -771,14 +774,14 @@ describe('REF у compose-update и self-update', () => {
   })
 
   it.each([
-    ['кавычка и команда', 'a";touch PWNED;echo "'],
-    ['подстановка команды', 'x$(touch PWNED)'],
-    ['make-функция', '$(shell touch PWNED)'],
-    ['выход вверх по пути', 'main/../../evil'],
-    ['начинается с дефиса', '-o/tmp/x'],
-    ['перевод строки', 'main\ntouch PWNED'],
-    ['пусто', '']
-  ])('%s — отказ до скачивания', (_label, REF) => {
+    ['quote and command', 'a";touch PWNED;echo "'],
+    ['command substitution', 'x$(touch PWNED)'],
+    ['make function', '$(shell touch PWNED)'],
+    ['path traversal upward', 'main/../../evil'],
+    ['starts with a dash', '-o/tmp/x'],
+    ['newline', 'main\ntouch PWNED'],
+    ['empty', '']
+  ])('%s — refused before downloading', (_label, REF) => {
     for (const target of ['compose-update', 'self-update']) {
       const r = make(target, { args: [`REF=${REF}`], here: { 'docker-compose.prod.yml': 'services: {}\n' } })
       expect(r.code, `${target}: ${r.out}`).not.toBe(0)
@@ -788,27 +791,27 @@ describe('REF у compose-update и self-update', () => {
     }
   })
 
-  it('self-update: REF=<ветка> из командной строки — берёт Makefile из неё', () => {
+  it('self-update: REF=<branch> from the command line — takes the Makefile from it', () => {
     const r = make('self-update', { args: ['REF=claude/some-branch'] })
     expect(r.calls).toContain(`curl ${RAW}/claude/some-branch/Makefile`)
   })
 })
 
-// ─── override: команды и проверки Makefile не подменить ───────────────
-// Находка безопасности на #16: переменная командной строки (или MAKEFLAGS) заменяла SH_LIB — начало
-// рецепта каждой цели, — функцию проверки cli и саму команду compose.
-describe('внутренние переменные Makefile не подменить командной строкой', () => {
+// ─── override: Makefile commands and checks can't be substituted ──────
+// A security finding from #16: a command-line variable (or MAKEFLAGS) used to be able to replace
+// SH_LIB — the start of every target's recipe — the cli check function, and the compose command itself.
+describe('internal Makefile variables cannot be substituted from the command line', () => {
   it.each([
-    ['SH_LIB — начало рецепта', 'doctor', ['SH_LIB=touch PWNED;']],
-    ['cli — функция проверки значений', 'doctor', ['cli=$(shell touch PWNED)', 'PROXY=x']],
-    // Вложенный make в self-update — буквально `make`: MAKE= из командной строки его не подменяет.
-    ['MAKE — вложенный make', 'self-update', ['MAKE=touch PWNED;']]
+    ['SH_LIB — start of the recipe', 'doctor', ['SH_LIB=touch PWNED;']],
+    ['cli — the value-checking function', 'doctor', ['cli=$(shell touch PWNED)', 'PROXY=x']],
+    // The nested make in self-update is literally `make`: MAKE= from the command line doesn't replace it.
+    ['MAKE — the nested make', 'self-update', ['MAKE=touch PWNED;']]
   ])('%s', (_label, target, args) => {
     const r = make(target, { ...HEALTHY, args, env: { ...HEALTHY.env, FAKE_DL: MAKEFILE } })
     expect(existsSync(join(r.dir, 'PWNED')), r.out).toBe(false)
   })
 
-  it('COMPOSE_ENV — prod-up всё равно зовёт docker compose без DOMAIN из оболочки', () => {
+  it('COMPOSE_ENV — prod-up still calls docker compose without DOMAIN from the shell', () => {
     const r = make('prod-up', { args: ['COMPOSE_ENV=touch PWNED;'], env: { DOMAIN: 'bank-import.example.by' } })
     expect(r.calls).toContain('compose-env DOMAIN=unset KEY=unset')
     expect(existsSync(join(r.dir, 'PWNED'))).toBe(false)
@@ -817,12 +820,12 @@ describe('внутренние переменные Makefile не подмени
 
 // ─── make self-update ─────────────────────────────────────────────────
 describe('make self-update', () => {
-  const NEXT = `${MAKEFILE}\n# следующая версия\n`
+  const NEXT = `${MAKEFILE}\n# next version\n`
 
-  it('скачанный Makefile заменяет рабочий, прежний — в копии, затем справка', () => {
+  it('downloaded Makefile replaces the working one, previous one is kept as a copy, then help runs', () => {
     const r = make('self-update', { env: { FAKE_DL: NEXT } })
     expect(r.code, r.out).toBe(0)
-    expect(readdirSync(r.dir).filter(f => f.startsWith('.Makefile.')), 'временный файл убран').toEqual([])
+    expect(readdirSync(r.dir).filter(f => f.startsWith('.Makefile.')), 'temp file cleaned up').toEqual([])
     expect(readFileSync(join(r.dir, 'Makefile'), 'utf8')).toBe(NEXT)
     const backups = readdirSync(r.dir).filter(f => f.startsWith('Makefile.bak-'))
     expect(backups).toHaveLength(1)
@@ -832,23 +835,23 @@ describe('make self-update', () => {
   })
 
   it.each([
-    ['не скачался', {}],
-    ['скачалась не Makefile-страница', { FAKE_DL: '404: Not Found' }]
-  ])('%s — говорит об этом, рабочий Makefile не тронут', (_label, env) => {
+    ['download failed', {}],
+    ['downloaded a non-Makefile page', { FAKE_DL: '404: Not Found' }]
+  ])('%s — says so, working Makefile untouched', (_label, env) => {
     const r = make('self-update', { env })
     expect(r.code).not.toBe(0)
     expect(r.out).toContain('Makefile из main не скачался или не прошёл проверку — рабочий не тронут')
     expect(readFileSync(join(r.dir, 'Makefile'), 'utf8')).toBe(MAKEFILE)
   })
 
-  it('права Makefile при замене остаются прежними: замена — mv временного файла с правами прежнего', () => {
+  it('Makefile permissions stay the same after the replace: mv of a temp file with the previous permissions', () => {
     const r = make('self-update', { env: { FAKE_DL: NEXT }, modes: { Makefile: 0o640 } })
     expect(r.code, r.out).toBe(0)
     expect(readFileSync(join(r.dir, 'Makefile'), 'utf8')).toBe(NEXT)
     expect(statSync(join(r.dir, 'Makefile')).mode & 0o777).toBe(0o640)
   })
 
-  it('make -n self-update только показывает команды: ничего не скачивает и не заменяет', () => {
+  it('make -n self-update only shows the commands: downloads and replaces nothing', () => {
     const r = make('self-update', { args: ['-n'], env: { FAKE_DL: NEXT } })
     expect(r.calls.some(c => c.startsWith('curl '))).toBe(false)
     expect(readFileSync(join(r.dir, 'Makefile'), 'utf8')).toBe(MAKEFILE)

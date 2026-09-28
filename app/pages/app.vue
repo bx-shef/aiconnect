@@ -1,8 +1,8 @@
 <script setup lang="ts">
-// Главная страница приложения в портале (пункт «Приложения» → aiconnect): что это и в каком
-// состоянии. Администратору — ещё и что не настроено на сервере приложения (GET /api/health,
-// app/utils/serverHealth.ts) и код приложения для B24_APP_CODE: изнутри портала его видно через
-// `app.info`, а без него сервер отклоняет запросы из портала.
+// The app's home page inside the portal (the "Applications" item → aiconnect): what it is and its
+// current state. For the admin — also what isn't configured on the app server (GET /api/health,
+// app/utils/serverHealth.ts) and the app code for B24_APP_CODE: it's visible from inside the portal via
+// `app.info`, and without it the server rejects requests from the portal.
 import { isPortalAdmin } from '~/utils/profile'
 import { serverProblems, type ServerProblem } from '~/utils/serverHealth'
 
@@ -12,7 +12,7 @@ const loadError = ref('')
 const serverIssues = ref<ServerProblem[]>([])
 const appCode = ref('')
 
-/** Проверка сервера — только для администратора: сотруднику чинить это нечем. */
+/** Server check — admin only: a regular employee has nothing to fix it with. */
 async function checkServer(): Promise<void> {
   const health = await $fetch('/api/health').catch(() => null)
   serverIssues.value = serverProblems(health)

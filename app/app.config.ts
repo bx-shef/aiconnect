@@ -1,5 +1,5 @@
-// useColorMode() в b24ui читает настройки темы с ВЕРХНЕГО уровня app config — без этих ключей
-// переключатель темы — пустышка (урок эталона client-bank-alfa-by). `auto` — как в ОС.
+// useColorMode() in b24ui reads theme settings from the TOP level of the app config — without these keys
+// the theme switcher is a no-op (lesson from the client-bank-alfa-by reference app). `auto` — follows the OS.
 export default defineAppConfig({
   colorMode: true,
   colorModeInitialValue: 'auto'

@@ -1,28 +1,30 @@
-// Окружение смок-набора: адрес тестового портала (вебхук). Чистые функции — проверяются
-// юнит-тестом (tests/smokeEnv.test.ts) без сети.
+// Smoke suite environment: test portal address (webhook). Pure functions — covered by a unit
+// test (tests/smokeEnv.test.ts) with no network.
 //
-// Подход — из ai-price-import (scripts/lib/envFile.mjs, testPortalGuard.mjs), с их граблями:
-// • адрес портала берётся ТОЛЬКО из git-ignored файла, не из переменных окружения: в оболочке
-//   разработчика может жить `B24_HOOK` другого (боевого!) портала — так в прайсах уже уходили не туда;
-// • последнее вхождение ключа (семантика dotenv), кавычки снимаются, `export KEY=` понимается,
-//   закомментированный `#KEY=` и ключ-суффикс (`OLD_B24_HOOK`) не подхватываются;
-// • запуск только на портале из списка тестовых, иной домен — лишь по явному согласию с названным
-//   доменом: следующие этапы будут регистрировать провайдеров в портале (docs/PLAN.md).
+// Approach taken from ai-price-import (scripts/lib/envFile.mjs, testPortalGuard.mjs), along with
+// the pitfalls it already hit:
+// • the portal address is taken ONLY from a git-ignored file, never from environment variables: a
+//   developer's shell may hold `B24_HOOK` for a different (production!) portal — prices have already
+//   gone to the wrong place this way;
+// • last occurrence of the key wins (dotenv semantics), quotes are stripped, `export KEY=` is
+//   understood, a commented-out `#KEY=` and a suffixed key (`OLD_B24_HOOK`) are not picked up;
+// • runs only against a portal from the test list; any other domain requires explicit consent
+//   naming that exact domain: later stages will register providers on the portal (docs/PLAN.md).
 
-/** Git-ignored файл окружения смока по умолчанию (`.env.*` в .gitignore). */
+/** Default git-ignored smoke env file (`.env.*` in .gitignore). */
 export const DEFAULT_SMOKE_ENV_FILE = '.env.b24test'
 
-/** Порталы, на которых смоку разрешено работать. Домен — не секрет; секрет — код в пути вебхука. */
+/** Portals the smoke suite is allowed to run against. The domain is not secret; the secret is the webhook path code. */
 export const TEST_PORTALS: ReadonlySet<string> = new Set([
-  'b24-ypkv9c.bitrix24.by' // тестовый портал шаблона invoice-from-tasks (с 24.09.2026)
+  'b24-ypkv9c.bitrix24.by' // test portal for the invoice-from-tasks template (since 2026-09-24)
 ])
 
 /**
- * Значение ключа из текста `.env`: последнее вхождение, без кавычек, с поддержкой `export`.
- * Нет ключа или пусто — `''`.
+ * Value of a key from `.env` text: last occurrence, unquoted, with `export` support.
+ * No key or empty — `''`.
  */
 export function readEnvValue(text: string, key: string): string {
-  // `[ \t]*`, не `\s*`: `\s` захватил бы перевод строки, и якорь «начало строки» перестал бы быть правдой.
+  // `[ \t]*`, not `\s*`: `\s` would also match a newline, breaking the "start of line" anchor.
   const re = new RegExp(`^[ \\t]*(?:export[ \\t]+)?${key}=(.*)$`, 'gm')
   let value = ''
   for (const m of text.matchAll(re)) value = m[1] ?? ''
@@ -30,13 +32,13 @@ export function readEnvValue(text: string, key: string): string {
 }
 
 export interface SmokeEnv {
-  /** Адрес вебхука (секрет — в выводе не показывается). */
+  /** Webhook address (a secret — never included in output). */
   hook: string
-  /** Хост портала — для стража и сообщений. */
+  /** Portal host — for the guard and messages. */
   host: string
 }
 
-/** Окружение из текста файла. Нет `B24_HOOK` — `null` (смок пропускается целиком). */
+/** Environment from a file's text. No `B24_HOOK` — `null` (the whole smoke suite is skipped). */
 export function parseSmokeEnv(fileText: string): SmokeEnv | null {
   const hook = readEnvValue(fileText, 'B24_HOOK')
   if (!hook) return null
@@ -46,17 +48,17 @@ export function parseSmokeEnv(fileText: string): SmokeEnv | null {
     if (url.protocol !== 'https:') throw new Error('not https')
     host = url.host.toLowerCase()
   } catch {
-    // Сам адрес в сообщение не кладём: в нём секрет.
+    // The address itself is not included in the message: it contains the secret.
     throw new Error('B24_HOOK в файле окружения смока — не https-адрес вебхука')
   }
   return { hook, host }
 }
 
 /**
- * Страж: работать можно только с тестовым порталом. Другой домен — только если он назван явно в
- * `B24_SMOKE_YES_TARGET` (молчаливого «наверное, тестовый» нет).
+ * Guard: only a test portal may be used. Any other domain requires it to be explicitly named in
+ * `B24_SMOKE_YES_TARGET` (no silent "probably a test portal" fallback).
  *
- * @throws Error с объяснением и подсказкой, как дать согласие
+ * @throws Error explaining why, with a hint on how to give consent
  */
 export function assertTestPortal(host: string, yesTarget = ''): void {
   if (TEST_PORTALS.has(host)) return

@@ -1,18 +1,18 @@
-// Вызовы REST Битрикс24 с сервера — через @bitrix24/b24jssdk (класс B24OAuth), как в эталоне
-// client-bank-alfa-by (server/utils/b24Sdk.ts). Два вида клиента:
-//   • по фрейм-токену пользователя — права этого пользователя, обновить токен нельзя;
-//   • по сохранённому токену установки — права администратора-установщика, с рефрешем.
-// Все исходящие методы перечислены в docs/REST_METHODS.md.
+// Server-side calls to the Bitrix24 REST API — via @bitrix24/b24jssdk (the B24OAuth class), as
+// in the reference app client-bank-alfa-by (server/utils/b24Sdk.ts). Two kinds of client:
+//   - by user frame token — that user's rights, the token cannot be refreshed;
+//   - by the saved install token — installer-admin rights, with refresh.
+// All outgoing methods are listed in docs/REST_METHODS.md.
 
 import { B24OAuth } from '@bitrix24/b24jssdk'
 import type { B24OAuthParams } from '@bitrix24/b24jssdk'
 import { assertPortalHost, DEFAULT_OAUTH_HOST } from './b24Host'
 import type { OAuthCreds } from './verifyInstallMember'
 
-/** Вызов REST-метода: результат (`result` конверта) или исключение с текстом ошибок портала. */
+/** Calls a REST method: the envelope's `result`, or an exception with the portal's error text. */
 export type RestCall = (method: string, params?: Record<string, unknown>) => Promise<unknown>
 
-/** Сообщение, по которому видно, что фрейм-токен отвергнут (обновить его на сервере нельзя). */
+/** Message that signals the frame token was rejected (it cannot be refreshed server-side). */
 export const FRAME_TOKEN_REJECTED = 'frame token rejected'
 
 interface TokenInput {
@@ -22,14 +22,14 @@ interface TokenInput {
   refreshToken: string
   expiresAt: number
   applicationToken: string
-  /** Сервер авторизации портала (запись о портале); не задан — по умолчанию. */
+  /** Portal's authorization server (from the portal record); unset — falls back to the default. */
   oauthHost?: string
 }
 
 /**
- * Параметры B24OAuth из нашей записи о токене. Хост портала проходит SSRF-гард. Сервер
- * авторизации — свой у портала (`auth[server_endpoint]` установки): SDK шлёт рефреш на
- * `<serverEndpoint без /rest/>/oauth/token/`.
+ * Builds B24OAuth params from our token record. The portal host passes through the SSRF guard.
+ * The authorization server is the portal's own (from install's `auth[server_endpoint]`): the SDK
+ * sends the refresh to `<serverEndpoint without /rest/>/oauth/token/`.
  */
 export function oauthParams(token: TokenInput, nowMs: number): B24OAuthParams {
   const domain = assertPortalHost(token.domain)
@@ -49,7 +49,7 @@ export function oauthParams(token: TokenInput, nowMs: number): B24OAuthParams {
   }
 }
 
-/** Структурный срез клиента SDK, который мы зовём, — тесты подсовывают подделку. */
+/** Structural slice of the SDK client we call — tests pass in a fake. */
 export interface SdkCallClient {
   actions: {
     v2: {
@@ -64,7 +64,7 @@ export interface SdkCallClient {
   }
 }
 
-/** Обёртка клиента в `RestCall`: разворачивает конверт или бросает с сообщениями портала. */
+/** Wraps a client as a `RestCall`: unwraps the envelope or throws with the portal's messages. */
 export function restCallFrom(client: SdkCallClient): RestCall {
   return async (method, params = {}) => {
     const res = await client.actions.v2.call.make({ method, params })
@@ -74,8 +74,8 @@ export function restCallFrom(client: SdkCallClient): RestCall {
 }
 
 /**
- * Клиент по фрейм-токену. Своего refresh-токена у сервера нет: любая ошибка авторизации —
- * окончательный отказ, а не «обнови меня» (иначе SDK POST-ил бы пустой refresh_token).
+ * Client by frame token. The server has no refresh token of its own: any auth error is a final
+ * rejection, not a "refresh me" (otherwise the SDK would POST an empty refresh_token).
  */
 export function makeFrameCall(domain: string, accessToken: string, creds: OAuthCreds, nowMs = Date.now()): RestCall {
   const client = new B24OAuth(oauthParams({
@@ -86,8 +86,8 @@ export function makeFrameCall(domain: string, accessToken: string, creds: OAuthC
 }
 
 /**
- * Клиент по сохранённому токену установки. SDK сам обновит просроченный access-токен и
- * отдаст новые токены в `persist` — их надо сохранить, иначе следующий вызов начнёт со старого.
+ * Client by the saved install token. The SDK refreshes an expired access token itself and hands
+ * the new tokens to `persist` — they must be saved, or the next call starts with the stale one.
  */
 export function makePortalCall(
   token: TokenInput,
@@ -106,7 +106,7 @@ export function makePortalCall(
   return restCallFrom(client)
 }
 
-/** OAuth-реквизиты приложения из окружения; пустые строки — не заданы. */
+/** App's OAuth credentials from the environment; empty strings mean unset. */
 export function oauthCredsFromEnv(env: Record<string, string | undefined> = process.env): OAuthCreds {
   return {
     clientId: env.B24_CLIENT_ID?.trim() || '',

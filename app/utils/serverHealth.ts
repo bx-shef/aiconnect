@@ -1,7 +1,7 @@
-// Что не настроено на сервере приложения — по ответу GET /api/health (флаги «задано / нет»,
-// без секретов). Показывается администратору на главной: без B24_APP_CODE сервер отвечает 503
-// на все запросы из портала, а код приложения видно только изнутри портала (`app.info`).
-// Страница установки для этого не годится: после installFinish портал её перезагружает.
+// What isn't configured on the app server — from the GET /api/health response (flags "set / not set",
+// no secrets). Shown to the admin on the main page: without B24_APP_CODE the server responds with 503
+// to all requests from the portal, and the app code is only visible from inside the portal (`app.info`).
+// The install page doesn't work for this: the portal reloads it after installFinish.
 
 export interface HealthConfig {
   appCode?: unknown
@@ -10,15 +10,15 @@ export interface HealthConfig {
 }
 
 export interface ServerProblem {
-  /** Переменная окружения, которую нужно задать. */
+  /** The environment variable that needs to be set. */
   variable: string
-  /** Что не работает без неё. */
+  /** What doesn't work without it. */
   effect: string
-  /** Без этого приложение не работает совсем (иначе — не работает часть функций). */
+  /** Without this the app doesn't work at all (otherwise — some features don't work). */
   blocking: boolean
 }
 
-/** Проблемы настройки сервера; пустой список — всё задано. Неизвестный ответ — без выводов. */
+/** Server configuration problems; an empty list means everything is set. An unknown response yields no findings. */
 export function serverProblems(health: unknown): ServerProblem[] {
   const config = (health as { config?: HealthConfig } | null)?.config
   if (!config || typeof config !== 'object') return []

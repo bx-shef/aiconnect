@@ -1,17 +1,18 @@
-// Какая сборка запущена — для GET /api/health. Коммит зашивает в образ CI (Dockerfile, ARG
-// COMMIT_SHA): по нему с сервера видно, докатил ли Watchtower новый образ, и на какой
-// `sha-<7 знаков>` откатываться (docs/DEPLOY.md, «Откат»).
+// Which build is running — for GET /api/health. The commit is baked into the image by CI
+// (Dockerfile, ARG COMMIT_SHA): from it the server shows whether Watchtower has rolled out the
+// new image, and which `sha-<7 chars>` tag to roll back to (docs/DEPLOY.md, "Rollback").
 
-/** Сколько знаков коммита отдаём: столько же в теге образа `sha-…` (docker/metadata-action). */
+/** How many commit characters we expose: same length as in the `sha-…` image tag (docker/metadata-action). */
 export const SHORT_SHA = 7
 
 /**
- * Короткий коммит сборки из окружения. Принимается только полный SHA git (40 шестнадцатеричных
- * знаков), наружу — первые {@link SHORT_SHA}: health открыт без входа, поэтому ни произвольный
- * текст из переменной (вдруг туда по ошибке попало чужое), ни полный отпечаток версии не отдаём
- * (ревью безопасности на #16) — короткого хватает, чтобы найти тег `sha-…` для отката.
+ * Short build commit from the environment. Only a full git SHA (40 hex characters) is accepted;
+ * exposed externally are just the first {@link SHORT_SHA}: health is open without login, so we
+ * never return an arbitrary string from the variable (in case something else ended up there by
+ * mistake) nor the full version fingerprint (security review on #16) — the short form is enough
+ * to find the `sha-…` tag to roll back to.
  *
- * @returns 7 знаков SHA в нижнем регистре или `null`: не задан (локальная сборка) или не похож на SHA
+ * @returns 7 lowercase SHA characters, or `null` if unset (local build) or not SHA-shaped
  */
 export function buildCommit(raw: string | undefined): string | null {
   const value = raw?.trim().toLowerCase() ?? ''

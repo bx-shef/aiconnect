@@ -1,9 +1,9 @@
-// Конфигурация Nuxt. Один артефакт: Nitro-сервер (`pnpm build` → `.output/server/index.mjs`)
-// отдаёт и страницы приложения, и наш `/api`. Отличие от эталона client-bank-alfa-by (там
-// статика за nginx + отдельный backend) — сознательное: серверная работа (токены установки, дальше —
-// приём запросов BitrixGPT на completions_url) живёт рядом со страницами, и второй артефакт стоил
-// бы дороже, чем экономит.
-// Подробно — docs/ARCHITECTURE.md.
+// Nuxt configuration. A single artifact: the Nitro server (`pnpm build` → `.output/server/index.mjs`)
+// serves both the app pages and our `/api`. The difference from the client-bank-alfa-by reference app
+// (static files behind nginx + separate backend) is deliberate: server-side work (install tokens, later —
+// receiving BitrixGPT requests on completions_url) lives next to the pages, and a second artifact would
+// cost more than it saves.
+// Details — docs/ARCHITECTURE.md.
 export default defineNuxtConfig({
   modules: [
     '@nuxt/eslint',
@@ -11,8 +11,8 @@ export default defineNuxtConfig({
     '@vueuse/nuxt'
   ],
 
-  // Все страницы живут во фрейме Битрикс24 и без него бесполезны: SSR им не нужен, а SPA
-  // избавляет от ловушек гидрации с редиректами слайдера (docs/PAGE_GUIDE.md).
+  // All pages live inside the Bitrix24 frame and are useless without it: they don't need SSR, and SPA
+  // avoids hydration pitfalls with slider redirects (docs/PAGE_GUIDE.md).
   ssr: false,
 
   devtools: { enabled: false },
@@ -21,10 +21,10 @@ export default defineNuxtConfig({
 
   runtimeConfig: {
     public: {
-      // Абсолютный адрес приложения (https://…) — из него строится обработчик событий.
-      // Битрикс24 не принимает относительные адреса в event.bind.
+      // Absolute app address (https://…) — the event handler is built from it.
+      // Bitrix24 doesn't accept relative addresses in event.bind.
       siteUrl: '',
-      // Код приложения в Маркете / локального приложения — нужен pull-событиям и ссылкам.
+      // The app's code in the Marketplace / local app — needed for pull events and links.
       b24AppCode: ''
     }
   },
@@ -32,13 +32,14 @@ export default defineNuxtConfig({
   compatibilityDate: '2025-01-15',
 
   nitro: {
-    // Скрипты и стили (/_nuxt, ~2 МБ) сжимаются при сборке в .gz и .br, и Nitro отдаёт их по
-    // Accept-Encoding. В эталоне client-bank это делал его nginx; у нас его нет, а общий
-    // nginx-proxy сам не сжимает (замер 2026-09-25: скрипт ушёл 95 КБ без Content-Encoding).
+    // Scripts and styles (/_nuxt, ~2 MB) are compressed at build time into .gz and .br, and Nitro serves
+    // them based on Accept-Encoding. In the client-bank reference app that was its nginx; we don't have
+    // one, and the shared nginx-proxy doesn't compress on its own (measured 2026-09-25: a script went out
+    // at 95 KB without Content-Encoding).
     compressPublicAssets: true,
     storage: {
-      // Токены установки порталов (server/utils/tokenStore.ts). Путь относительно рабочего
-      // каталога процесса; в Docker на `/app/.data` смонтирован том — см. docs/DEPLOY.md.
+      // Portal install tokens (server/utils/tokenStore.ts). Path is relative to the process's working
+      // directory; in Docker a volume is mounted at `/app/.data` — see docs/DEPLOY.md.
       portals: { driver: 'fs', base: './.data/portals' }
     }
   },

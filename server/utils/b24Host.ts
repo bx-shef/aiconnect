@@ -1,11 +1,12 @@
-// SSRF-гард адреса портала. Домен приходит от клиента (заголовок X-B24-Domain), и без
-// белого списка наш сервер стал бы примитивом «сходи куда скажу» — вплоть до утечки
-// собственного токена на чужой хост. Перенесено из client-bank-alfa-by (server/utils/b24Rest.ts).
-// Хост вынимается через `URL`, а не регэкспом: `x.bitrix24.by@evil.com` даёт настоящий хост.
+// SSRF guard for the portal address. The domain comes from the client (X-B24-Domain header), and
+// without an allow-list our server would become a "go wherever I say" primitive — up to and
+// including leaking its own token to a foreign host. Ported from client-bank-alfa-by
+// (server/utils/b24Rest.ts). The host is extracted via `URL`, not a regex:
+// `x.bitrix24.by@evil.com` yields its real host.
 
 /**
- * Зоны облачного Битрикс24. Ведущая точка обязательна: она не пускает `evil-bitrix24.by`
- * и `x.bitrix24.by.attacker.com`. Список — из эталона (зоны DPA Битрикс24 + зоны 1С-Битрикс).
+ * Cloud Bitrix24 zones. The leading dot is required: it blocks `evil-bitrix24.by`
+ * and `x.bitrix24.by.attacker.com`. The list is from the reference app (Bitrix24 DPA zones + 1C-Bitrix zones).
  */
 export const B24_CLOUD_HOST_SUFFIXES = [
   '.bitrix24.ru', '.bitrix24.by', '.bitrix24.kz', '.bitrix24.ua',
@@ -16,7 +17,7 @@ export const B24_CLOUD_HOST_SUFFIXES = [
   '.bitrix24.vn', '.bitrix24.tech'
 ] as const
 
-/** Голый хост в нижнем регистре; `''`, если разобрать не удалось. */
+/** Bare lowercase host; `''` if it couldn't be parsed. */
 export function portalHostname(host: string): string {
   const raw = String(host ?? '').trim().replace(/^https?:\/\//i, '')
   if (!raw) return ''
@@ -27,7 +28,7 @@ export function portalHostname(host: string): string {
   }
 }
 
-/** Разбор списка коробочных порталов из окружения (`B24_SELFHOSTED_HOSTS`, через запятую/пробел). */
+/** Parses the on-premise portal list from the environment (`B24_SELFHOSTED_HOSTS`, comma/space-separated). */
 export function parseSelfHostedHosts(raw: string | undefined): Set<string> {
   const out = new Set<string>()
   for (const token of String(raw ?? '').split(/[\s,]+/)) {
@@ -37,7 +38,7 @@ export function parseSelfHostedHosts(raw: string | undefined): Set<string> {
   return out
 }
 
-/** Разрешён ли хост: облачная зона или явно перечисленный коробочный портал. */
+/** Whether the host is allowed: a cloud zone, or an explicitly listed on-premise portal. */
 export function isAllowedPortalHost(host: string, selfHosted: Set<string> = new Set()): boolean {
   const h = portalHostname(host)
   if (!h) return false
@@ -45,7 +46,7 @@ export function isAllowedPortalHost(host: string, selfHosted: Set<string> = new 
   return selfHosted.has(h)
 }
 
-/** Проверяет хост и возвращает ЧИСТОЕ имя — именно его, а не вход, надо подставлять в адрес. */
+/** Checks the host and returns the CLEAN name — this is what to put in the URL, not the raw input. */
 export function assertPortalHost(host: string, env: Record<string, string | undefined> = process.env): string {
   if (!isAllowedPortalHost(host, parseSelfHostedHosts(env.B24_SELFHOSTED_HOSTS))) {
     throw new Error(`B24 REST refused — host not allow-listed: ${portalHostname(host) || '(unparseable)'}`)
@@ -54,25 +55,27 @@ export function assertPortalHost(host: string, env: Record<string, string | unde
 }
 
 /**
- * Серверы авторизации облака. `oauth.bitrix24.tech` — текущая документация (статьи об OAuth и
- * пример события ONAPPINSTALL); `oauth.bitrix.info` — прежний адрес: на него ходили эталоны, и на
- * нём, возможно, живут порталы других зон. Какой сервер у портала, говорит `auth[server_endpoint]`
- * события установки («Адрес сервера авторизации для обновления токена» — документация события).
+ * Cloud authorization servers. `oauth.bitrix24.tech` is current per the docs (OAuth articles and
+ * the ONAPPINSTALL event example); `oauth.bitrix.info` is the previous address: reference apps
+ * used it, and portals from other zones may still live there. Which server a portal uses is
+ * given by the install event's `auth[server_endpoint]` ("Authorization server address for token
+ * renewal" per the event docs).
  */
 export const B24_OAUTH_HOSTS = ['oauth.bitrix24.tech', 'oauth.bitrix.info'] as const
-/** Сервер авторизации, если событие его не назвало (у старых записей о портале его тоже нет). */
+/** Authorization server to use when the event didn't name one (older portal records also lack it). */
 export const DEFAULT_OAUTH_HOST = 'oauth.bitrix24.tech'
 
 /**
- * Сервер авторизации установки из `auth[server_endpoint]` события: только облачный, из
- * {@link B24_OAUTH_HOSTS}; поля нет — {@link DEFAULT_OAUTH_HOST}.
+ * Resolves the install's authorization server from the event's `auth[server_endpoint]`: cloud
+ * only, from {@link B24_OAUTH_HOSTS}; no field — {@link DEFAULT_OAUTH_HOST}.
  *
- * ⚠ Коробочный портал сервером авторизации не принимается, даже из `B24_SELFHOSTED_HOSTS`.
- * Коробка ручается за свой домен, но `member_id` в её «гранте» может быть любым: её владелец
- * перезаписал бы запись облачного портала-жертвы, а наш `client_secret` ушёл бы ему в запросе
- * продления (находка /code-review). Приложение облачное; установка из коробки не сохраняется.
+ * Warning: an on-premise portal is never accepted as the authorization server, even one listed in
+ * `B24_SELFHOSTED_HOSTS`. An on-premise install vouches for its own domain, but the `member_id`
+ * in its "grant" can be anything: its owner could overwrite a victim cloud portal's record, and
+ * our `client_secret` would go to them in the renewal request (finding of /code-review). This app
+ * is cloud-only; an on-premise install is never stored.
  *
- * @returns хост или `null` — сервер не из разрешённых (SSRF и подделка гранта)
+ * @returns the host, or `null` if the server isn't allow-listed (guards against SSRF and grant forgery)
  */
 export function resolveOAuthHost(serverEndpoint: string): string | null {
   if (!serverEndpoint.trim()) return DEFAULT_OAUTH_HOST
@@ -81,8 +84,8 @@ export function resolveOAuthHost(serverEndpoint: string): string | null {
 }
 
 /**
- * Значение CSP `frame-ancestors` для страниц: встраивать их могут только порталы Битрикс24.
- * Тот же список зон, что у SSRF-гарда, — один источник, чтобы они не разъехались.
+ * CSP `frame-ancestors` value for pages: only Bitrix24 portals may embed them.
+ * Same zone list as the SSRF guard — a single source so the two never drift apart.
  */
 export function frameAncestors(selfHostedRaw: string | undefined): string {
   const hosts = [

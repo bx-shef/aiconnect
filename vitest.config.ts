@@ -1,8 +1,8 @@
 import { defineConfig } from 'vitest/config'
 import { fileURLToPath } from 'node:url'
 
-// Юнит-тесты чистых функций в node. Алиасы повторяют Nuxt (`~` → app, `#shared` → shared),
-// чтобы модули импортировались в тестах так же, как в приложении.
+// Unit tests for pure functions in node. Aliases mirror Nuxt (`~` → app, `#shared` → shared),
+// so modules import in tests the same way they do in the app.
 export default defineConfig({
   resolve: {
     alias: {

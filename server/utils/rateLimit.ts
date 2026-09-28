@@ -1,31 +1,31 @@
-// Ограничение частоты: события портала и живые проверки фрейм-токена (ключи — адрес клиента).
-// Счётчик в памяти процесса — у нас один экземпляр сервера; при горизонтальном масштабировании
-// понадобится общий (Redis), см. docs/ARCHITECTURE.md.
+// Rate limiting: portal events and live frame-token checks (keyed by client address).
+// An in-process counter — we run a single server instance; horizontal scaling would need
+// a shared one (Redis), see docs/ARCHITECTURE.md.
 
 export interface WindowLimit {
-  /** Сколько единиц разрешено в окне (запросов — или больше, если попытка весит больше 1). */
+  /** How many units are allowed per window (requests — or more, if an attempt weighs more than 1). */
   max: number
   windowMs: number
 }
 
 /**
- * Потолок ключей в памяти: поток запросов с тысяч адресов не должен съесть память. Ключ хранит
- * до `max` попаданий (время и вес — два числовых массива): 20 000 ключей × 60 попаданий — порядка
- * 20 МБ.
+ * Cap on keys held in memory: a flood of requests from thousands of addresses must not exhaust
+ * memory. A key holds up to `max` hits (time and weight — two number arrays): 20,000 keys x 60
+ * hits is roughly 20 MB.
  */
 export const MAX_WINDOW_KEYS = 20_000
-/** Чистка устаревших ключей — раз в столько вызовов `take`, а не на каждом. */
+/** Stale-key cleanup runs once every this many `take` calls, not on every one. */
 const PRUNE_EVERY = 256
 
 interface Bucket {
   windowMs: number
-  /** Моменты попаданий по возрастанию. */
+  /** Hit timestamps in ascending order. */
   times: number[]
-  /** Вес каждого попадания (параллельно `times`). */
+  /** Weight of each hit (parallel to `times`). */
   weights: number[]
 }
 
-/** Проверка одного окна: ключ, предел и (необязательно) свой вес попытки. */
+/** A single window check: key, limit, and an optional weight for this attempt. */
 export type WindowCheck = [key: string, limit: WindowLimit, weight?: number]
 
 export class SlidingWindow {
@@ -34,15 +34,15 @@ export class SlidingWindow {
 
   constructor(readonly maxKeys: number = MAX_WINDOW_KEYS) {}
 
-  /** Сколько ключей сейчас в памяти (для тестов и диагностики). */
+  /** How many keys are currently in memory (for tests and diagnostics). */
   get size(): number {
     return this.#buckets.size
   }
 
   /**
-   * Учитывает попытку сразу во всех окнах; вес — свой у проверки или `weight`. `false` — хотя бы в
-   * одном окне не хватает запаса, и тогда попытка не засчитывается НИГДЕ: иначе отказ по лимиту
-   * портала съедал бы лимит сотрудника.
+   * Records an attempt across all windows at once; weight is per-check or falls back to `weight`.
+   * `false` — at least one window is out of headroom, in which case the attempt isn't counted
+   * ANYWHERE: otherwise a portal-limit rejection would eat into an employee's limit.
    */
   take(checks: WindowCheck[], now = Date.now(), weight = 1): boolean {
     const fresh = checks.map(([key, limit, own]) => {
@@ -56,8 +56,8 @@ export class SlidingWindow {
         bucket.times.push(now)
         bucket.weights.push(w)
       }
-      // Удалить и вставить заново: Map хранит порядок вставки, и свежие ключи уходят в конец —
-      // при переполнении вытесняются давно не виденные.
+      // Delete and re-insert: Map preserves insertion order, and fresh keys move to the end —
+      // on overflow, the ones not seen in a while get evicted.
       this.#buckets.delete(key)
       if (bucket.times.length) this.#buckets.set(key, bucket)
     }
@@ -65,7 +65,7 @@ export class SlidingWindow {
     return ok
   }
 
-  /** Отбрасывает попадания старше окна: попадание ровно `windowMs` назад уже не считается. */
+  /** Drops hits older than the window: a hit exactly `windowMs` ago no longer counts. */
   #expire(prev: Bucket | undefined, windowMs: number, now: number): Bucket {
     if (!prev) return { windowMs, times: [], weights: [] }
     let drop = 0
@@ -79,10 +79,11 @@ export class SlidingWindow {
   }
 
   /**
-   * Снимает ключи, чьё СОБСТВЕННОЕ окно истекло (раньше окно было общим — час, и ключи с окном в
-   * минуту жили в 60 раз дольше нужного). Если ключей всё ещё больше потолка — вытесняет самые
-   * давно виденные до 90 % потолка, чтобы полный проход случался редко. Вытеснение сбрасывает
-   * чужой счётчик, то есть делает лимит мягче, а не строже, — зато память ограничена.
+   * Drops keys whose OWN window has expired (the window used to be a single shared hour, so keys
+   * with a one-minute window lived 60x longer than needed). If there are still more keys than the
+   * cap, evicts the least recently seen ones down to 90% of the cap, so a full pass is rare.
+   * Eviction resets someone's counter, making the limit softer rather than stricter — but memory
+   * stays bounded.
    */
   #prune(now: number): void {
     for (const [key, bucket] of this.#buckets) {

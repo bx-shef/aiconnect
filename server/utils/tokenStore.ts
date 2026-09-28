@@ -1,12 +1,13 @@
-// Хранилище токенов установки: member_id → домен, токены администратора-установщика и
-// application_token. Сейчас нужно для одного: убедиться, что запрос к нашему API пришёл с портала,
-// где приложение установлено (frameAuth.ts, docs/B24_EVENTS.md). Токены установщика сохраняются
-// заранее: понадобятся ли они провайдеру — решат этапы 1–3 docs/PLAN.md.
+// Install token store: member_id → domain, installer-admin tokens, and application_token.
+// Right now this exists for one thing: confirming a request to our API came from a portal where
+// the app is installed (frameAuth.ts, docs/B24_EVENTS.md). Installer tokens are saved ahead of
+// time: whether the provider will need them is a call for stages 1-3 of docs/PLAN.md.
 //
-// Хранилище — unstorage (Nitro `useStorage('portals')`, драйвер fs, см. nuxt.config.ts), а не
-// Postgres, как в эталоне: здесь одна запись на портал и никаких запросов по полям.
-// Оба токена шифруются (secretCrypto.ts): access-токен живёт час, но это час прав администратора
-// портала — при утечке тома он не должен читаться (находка отдела безопасности панели).
+// Storage is unstorage (Nitro `useStorage('portals')`, fs driver, see nuxt.config.ts), not
+// Postgres like the reference app: here it's one record per portal and no field-level queries.
+// Both tokens are encrypted (secretCrypto.ts): the access token lives for an hour, but that's an
+// hour of portal admin rights — a leaked volume must not be readable (finding from the panel's
+// security team).
 
 import { DEFAULT_OAUTH_HOST } from './b24Host'
 import { decryptSecret, encryptSecret } from './secretCrypto'
@@ -14,23 +15,23 @@ import { decryptSecret, encryptSecret } from './secretCrypto'
 export interface PortalRecord {
   memberId: string
   domain: string
-  /** Зашифрованный access-токен (`iv:tag:data`). */
+  /** Encrypted access token (`iv:tag:data`). */
   accessTokenEnc: string
-  /** Зашифрованный refresh-токен (`iv:tag:data`). */
+  /** Encrypted refresh token (`iv:tag:data`). */
   refreshTokenEnc: string
-  /** Момент истечения access-токена, мс. */
+  /** Access token expiry timestamp, ms. */
   expiresAt: number
-  /** Секрет подписи событий портала; пишется один раз — при первой установке. */
+  /** Portal event-signing secret; written once — on first install. */
   applicationToken: string
   installedAt: number
-  /** Сервер авторизации портала (из `auth[server_endpoint]` установки); у старых записей нет. */
+  /** Portal's authorization server (from install's `auth[server_endpoint]`); older records lack it. */
   oauthHost?: string
 }
 
 /**
- * Минимальный срез unstorage, который мы используем. Свой интерфейс, а не тип из `unstorage`:
- * пакет приходит транзитивно через Nitro, и прямой импорт зависел бы от раскладки node_modules.
- * `useStorage()` ему удовлетворяет структурно, тесты подсовывают Map.
+ * The minimal slice of unstorage we use. Our own interface rather than a type from `unstorage`:
+ * the package arrives transitively via Nitro, and a direct import would depend on node_modules
+ * layout. `useStorage()` satisfies it structurally; tests pass in a Map.
  */
 export interface KeyValue {
   getItem(key: string): Promise<unknown>
@@ -55,7 +56,7 @@ export async function getPortalByDomain(kv: KeyValue, domain: string): Promise<P
   const memberId = await kv.getItem(domainKey(domain))
   if (typeof memberId !== 'string') return null
   const record = await getPortal(kv, memberId)
-  // Индекс мог устареть: запись, чей домен уже другой, этому домену не принадлежит.
+  // The index may be stale: a record whose domain has since changed no longer belongs to this domain.
   return record && record.domain === domain.toLowerCase() ? record : null
 }
 
@@ -66,13 +67,13 @@ export interface SaveInstallInput {
   refreshToken: string
   expiresIn: number
   applicationToken: string
-  /** Сервер авторизации; не задан — {@link DEFAULT_OAUTH_HOST}. */
+  /** Authorization server; unset — {@link DEFAULT_OAUTH_HOST}. */
   oauthHost?: string
 }
 
 /**
- * Сохраняет установку. `applicationToken` — write-once: переустановка его не перезаписывает,
- * иначе поддельная «установка» могла бы подменить секрет, которым проверяются события.
+ * Saves an install. `applicationToken` is write-once: a reinstall doesn't overwrite it, or else a
+ * forged "install" could swap out the secret that events are verified with.
  */
 export async function saveInstall(kv: KeyValue, input: SaveInstallInput, now = Date.now()): Promise<void> {
   const prev = await getPortal(kv, input.memberId)
@@ -92,16 +93,16 @@ export async function saveInstall(kv: KeyValue, input: SaveInstallInput, now = D
 }
 
 /**
- * Снимает индекс домена, только если он всё ещё указывает на этот портал. Домен мог перейти к
- * другому порталу (переезд, освобождённое имя) — чужой индекс трогать нельзя, иначе тот портал
- * получит «не установлено» на каждый запрос (находка /code-review этого PR).
+ * Removes the domain index only if it still points at this portal. The domain may have moved to
+ * another portal (migration, freed-up name) — touching someone else's index is off-limits, or
+ * that portal would get "not installed" on every request (finding of /code-review on this PR).
  */
 async function removeDomainIfOwned(kv: KeyValue, domain: string, memberId: string): Promise<void> {
   const owner = await kv.getItem(domainKey(domain))
   if (typeof owner === 'string' && owner === memberId.toLowerCase()) await kv.removeItem(domainKey(domain))
 }
 
-/** Обновление токенов после рефреша. Только для существующей записи — удалённый портал не воскрешаем. */
+/** Updates tokens after a refresh. Existing records only — we don't resurrect a removed portal. */
 export async function updateTokens(kv: KeyValue, memberId: string, tokens: { accessToken: string, refreshToken: string, expiresAt: number }): Promise<void> {
   const prev = await getPortal(kv, memberId)
   if (!prev) return
@@ -113,7 +114,7 @@ export async function updateTokens(kv: KeyValue, memberId: string, tokens: { acc
   })
 }
 
-/** Удаление всего, что мы знаем о портале (событие удаления приложения). */
+/** Deletes everything we know about a portal (app-uninstall event). */
 export async function removePortal(kv: KeyValue, memberId: string): Promise<void> {
   const prev = await getPortal(kv, memberId)
   if (prev) await removeDomainIfOwned(kv, prev.domain, prev.memberId)
@@ -129,12 +130,12 @@ function decryptOrEmpty(blob: string): string {
   }
 }
 
-/** Расшифрованный access-токен записи; `''`, если его нет или ключ сменился. */
+/** Decrypted access token of a record; `''` if missing or the key changed. */
 export function accessTokenOf(record: PortalRecord): string {
   return decryptOrEmpty(record.accessTokenEnc)
 }
 
-/** Расшифрованный refresh-токен записи; `''`, если его нет или ключ сменился. */
+/** Decrypted refresh token of a record; `''` if missing or the key changed. */
 export function refreshTokenOf(record: PortalRecord): string {
   return decryptOrEmpty(record.refreshTokenEnc)
 }

@@ -1,11 +1,11 @@
 <script setup lang="ts">
-// Установка приложения в портал: проверить права → подписка на события → installFinish.
-// ⚠ event.bind ДО installFinish: иначе ONAPPINSTALL (токены установки) не придёт.
-// ⚠ После installFinish портал перезагружает страницу — показывать что-то после него бесполезно
-//   (подсказка с кодом приложения поэтому живёт на главной, pages/app.vue).
-// Страницу можно открыть и после установки (смена адреса сервера): тогда подписки обновляются,
-// а installFinish не вызывается — вне режима установки SDK на нём падает.
-// Провайдеры BitrixGPT (`ai.engine.register`) здесь не регистрируются — это этапы 1–3 docs/PLAN.md.
+// Installing the app into the portal: check scopes → subscribe to events → installFinish.
+// ⚠ event.bind BEFORE installFinish: otherwise ONAPPINSTALL (install tokens) won't arrive.
+// ⚠ After installFinish the portal reloads the page — showing anything after it is pointless
+//   (that's why the hint with the app code lives on the home page, pages/app.vue).
+// The page can also be opened after install (server address change): then subscriptions are
+// refreshed and installFinish isn't called — outside install mode the SDK fails on it.
+// BitrixGPT providers (`ai.engine.register`) are not registered here — that's stages 1-3 of docs/PLAN.md.
 
 import { eventBindCalls, missingScopes, staleEventHandlers } from '~/utils/install'
 
@@ -35,7 +35,7 @@ function mark(key: string, state: StepState, note?: string) {
 async function runInstall() {
   const frame = b24.getOrThrow()
   frame.parent.setTitle('Установка приложения')
-  // Адрес приложения нужен абсолютный. В разработке берём текущий, в бою — из конфигурации.
+  // The app address must be absolute. In dev we take the current one, in prod — from config.
   const siteUrl = config.public.siteUrl || window.location.origin
 
   mark('scope', 'run')
@@ -43,8 +43,8 @@ async function runInstall() {
   const missing = missingScopes(granted)
   mark('scope', missing.length ? 'warn' : 'ok', missing.length ? `Не выданы права: ${missing.join(', ')} — добавьте их в карточке приложения` : undefined)
 
-  // Сначала — новое, потом снимаем старое: если регистрация упадёт, у приложения останется хотя
-  // бы прежняя подписка на удаление.
+  // New first, then remove the old: if registration fails, the app will at least keep
+  // its previous uninstall subscription.
   mark('events', 'run')
   const existing = await b24.call<unknown[]>('event.get')
   for (const ev of eventBindCalls(siteUrl, existing)) await b24.call(ev.method, ev.params)

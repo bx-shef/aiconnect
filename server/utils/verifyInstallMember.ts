@@ -1,34 +1,37 @@
-// Привязка member_id и домена при установке (защита от «отравления установки»). Перенесено из
-// client-bank-alfa-by (server/utils/verifyInstallMember.ts, #162 там) и дополнено сверкой домена.
+// Binding member_id and domain at install time (protection against "install poisoning"). Ported
+// from client-bank-alfa-by (server/utils/verifyInstallMember.ts, #162 there) and extended with
+// domain verification.
 //
-// Суть угрозы: member_id в ONAPPINSTALL — поле, которое присылает клиент, а application_token
-// общий для всех установок приложения. Установив наше приложение на СВОЙ портал, злоумышленник
-// может прислать «установку» с ЧУЖИМ member_id и своими токенами — и записи ставок чужого
-// портала пошли бы через его токен. Защита: обновляем присланный refresh_token на OAuth-сервере
-// Битрикс24 — ответ несёт НАСТОЯЩИЙ member_id этого гранта, и он обязан совпасть с заявленным.
-// Обновление РОТИРУЕТ токен: сохранять нужно вернувшийся грант, присланный уже истрачен.
+// The threat: member_id in ONAPPINSTALL is a field the client sends, while application_token is
+// shared across all installs of the app. By installing our app on THEIR OWN portal, an attacker
+// can send an "install" with SOMEONE ELSE'S member_id and their own tokens — and that victim
+// portal's records would then go through the attacker's token. The defense: we refresh the
+// submitted refresh_token against Bitrix24's OAuth server — the response carries the REAL
+// member_id of that grant, and it must match the claimed one. Refreshing ROTATES the token: the
+// returned grant must be saved, since the submitted one is already spent.
 //
-// ⚠ Домен сверяется так же, как member_id. Эталон сверял только member_id, и /code-review
-// этого PR нашёл обход: злоумышленник присылает СВОЙ member_id и свой грант (сверка проходит), но
-// `auth[domain]` жертвы — и индекс «домен → портал» начинает указывать на его запись. Настоящий
-// домен гранта — хост `client_endpoint` из ответа OAuth: документация («Автоматическое продление
-// токенов OAuth 2.0») называет его «адрес REST-интерфейса портала». ⚠ Поле `domain` того же
-// ответа — хост СЕРВЕРА АВТОРИЗАЦИИ (`oauth.bitrix24.tech` в примере документации), не портала:
-// сверять по нему нельзя.
+// Warning: the domain is verified the same way as member_id. The reference app verified only
+// member_id, and /code-review on this PR found a bypass: an attacker sends THEIR OWN member_id
+// and their own grant (verification passes), but the victim's `auth[domain]` — and the
+// "domain → portal" index starts pointing at the attacker's record. The grant's real domain is
+// the host of `client_endpoint` from the OAuth response: the docs ("Automatic OAuth 2.0 token
+// renewal") call it "the portal's REST interface address". Warning: the `domain` field of that
+// same response is the AUTHORIZATION SERVER's host (`oauth.bitrix24.tech` in the docs' example),
+// not the portal's — it must not be used for verification.
 //
-// Сервер авторизации — тот, что назвал портал в `auth[server_endpoint]`, но только из белого
-// списка (`b24Host.ts → resolveOAuthHost`): SSRF здесь нет. Секреты идут в теле, не в URL
-// (документация показывает GET со строкой запроса, тело принимается — проверено авторами
-// b24jssdk, oauth/auth.mjs; так же шлёт и сам SDK).
+// The authorization server is whichever one the portal named in `auth[server_endpoint]`, but only
+// from the allow-list (`b24Host.ts → resolveOAuthHost`): there's no SSRF here. Secrets go in the
+// body, not the URL (the docs show a GET with a query string, but a body is accepted — verified
+// against the b24jssdk source, oauth/auth.mjs; the SDK itself sends it the same way).
 
 export const INSTALL_VERIFY_TIMEOUT_MS = 15_000
 
-/** Адрес продления токена на сервере авторизации. */
+/** Token renewal URL on the authorization server. */
 export function oauthTokenUrl(oauthHost: string): string {
   return `https://${oauthHost}/oauth/token/`
 }
 
-/** Коды OAuth, означающие «грант поддельный» → 403. Остальное — «не можем проверить» → 503. */
+/** OAuth codes meaning "the grant is forged" → 403. Everything else — "can't verify" → 503. */
 const GRANT_REJECTION_CODES = new Set(['invalid_grant', 'invalid_token', 'expired_token'])
 
 export interface OAuthCreds {
@@ -39,8 +42,9 @@ export interface OAuthCreds {
 export type OAuthFetchFn = (url: string, init: { method: string, headers: Record<string, string>, body: string, signal?: AbortSignal }) => Promise<{ json: () => Promise<unknown> }>
 
 /**
- * Сырой POST обновления токена. Секреты — в теле формы, не в строке запроса (не попадут в логи).
- * Хост обязан прийти из `resolveOAuthHost`; здесь — только защита от мусора в адресе.
+ * Raw POST to refresh the token. Secrets go in the form body, not the query string (so they
+ * don't end up in logs). The host must come from `resolveOAuthHost`; this is only a guard
+ * against garbage in the address.
  */
 export function rawOauthRefresh(fetchFn: OAuthFetchFn, creds: OAuthCreds, timeoutMs = INSTALL_VERIFY_TIMEOUT_MS) {
   return async (refreshToken: string, oauthHost: string): Promise<unknown> => {
@@ -64,11 +68,11 @@ export interface RefreshedGrant {
   accessToken: string
   refreshToken: string
   expiresIn: number
-  /** Хост портала из `client_endpoint` гранта — настоящий домен установки. */
+  /** Portal host from the grant's `client_endpoint` — the real install domain. */
   domain: string
 }
 
-/** Хост из `client_endpoint` (`https://x.bitrix24.ru/rest/` → `x.bitrix24.ru`); `''` — не разобрать. */
+/** Host from `client_endpoint` (`https://x.bitrix24.ru/rest/` → `x.bitrix24.ru`); `''` — unparseable. */
 export function endpointHost(endpoint: unknown): string {
   if (typeof endpoint !== 'string' || !endpoint) return ''
   try {
@@ -80,15 +84,15 @@ export function endpointHost(endpoint: unknown): string {
 
 export interface InstallMemberResult {
   ok: boolean
-  /** 403 — member_id или домен не совпали / грант поддельный; 503 — проверить сейчас нельзя. */
+  /** 403 — member_id or domain mismatch / forged grant; 503 — can't verify right now. */
   status?: 403 | 503
   grant?: RefreshedGrant
 }
 
 /**
- * Сверяет заявленные member_id и домен с настоящими из OAuth-гранта. Никогда не бросает.
+ * Verifies the claimed member_id and domain against the real ones from the OAuth grant. Never throws.
  *
- * @param claimedDomain домен из события, уже нормализованный SSRF-гардом (`assertPortalHost`)
+ * @param claimedDomain domain from the event, already normalized by the SSRF guard (`assertPortalHost`)
  */
 export async function verifyInstallMember(claimedMemberId: string, claimedDomain: string, refreshToken: string, refresh: (rt: string) => Promise<unknown>): Promise<InstallMemberResult> {
   const claimed = claimedMemberId.trim().toLowerCase()
@@ -107,7 +111,7 @@ export async function verifyInstallMember(claimedMemberId: string, claimedDomain
   }
   const authoritative = String(o.member_id ?? '').trim().toLowerCase()
   const authoritativeHost = endpointHost(o.client_endpoint)
-  // Нет member_id или адреса портала в ответе — сверять нечем: «не можем проверить», а не «принять».
+  // No member_id or portal address in the response — nothing to verify against: "can't verify", not "accept".
   if (!authoritative || !authoritativeHost) return { ok: false, status: 503 }
   if (authoritative !== claimed || authoritativeHost !== claimedHost) return { ok: false, status: 403 }
   const expiresIn = Number(o.expires_in)

@@ -1,16 +1,16 @@
-// Входящие события Битрикс24 (ONAPPINSTALL / ONAPPUNINSTALL): разбор тела и проверка
-// подлинности. Перенесено из client-bank-alfa-by (app/utils/b24Events.ts), урезано до двух
-// событий, которые нам нужны. Контракт — docs/B24_EVENTS.md.
+// Incoming Bitrix24 events (ONAPPINSTALL / ONAPPUNINSTALL): body parsing and authenticity
+// verification. Ported from client-bank-alfa-by (app/utils/b24Events.ts), trimmed down to the
+// two events we need. Contract — docs/B24_EVENTS.md.
 
 export const B24_EVENT_INSTALL = 'ONAPPINSTALL'
 export const B24_EVENT_UNINSTALL = 'ONAPPUNINSTALL'
 
-/** Ключи, через которые тело вебхука могло бы отравить `Object.prototype`. */
+/** Keys through which the webhook body could pollute `Object.prototype`. */
 const POLLUTING_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
 
 /**
- * Восстанавливает объект из PHP-скобочной формы: `auth[member_id]=abc` → `{ auth: { member_id: 'abc' } }`.
- * Тело недоверенное (адрес вебхука публичный, токен проверяется ПОСЛЕ разбора) — опасные ключи пропускаем.
+ * Rebuilds an object from PHP bracket form: `auth[member_id]=abc` → `{ auth: { member_id: 'abc' } }`.
+ * The body is untrusted (the webhook URL is public, the token is checked AFTER parsing) — dangerous keys are skipped.
  */
 export function parseBracketForm(raw: string): Record<string, unknown> {
   const out: Record<string, unknown> = {}
@@ -31,13 +31,13 @@ export function parseBracketForm(raw: string): Record<string, unknown> {
   return out
 }
 
-/** Код события в верхнем регистре; `''`, если его нет. */
+/** Event code, uppercased; `''` if missing. */
 export function eventCode(payload: unknown): string {
   const code = (payload as { event?: unknown } | null)?.event
   return typeof code === 'string' ? code.toUpperCase() : ''
 }
 
-/** Сравнение за постоянное время — не выдаёт по таймингу, сколько символов секрета совпало. */
+/** Constant-time comparison — doesn't leak via timing how many secret characters matched. */
 export function safeEqual(a: string, b: string): boolean {
   const len = Math.max(a.length, b.length)
   let diff = a.length ^ b.length
@@ -48,10 +48,11 @@ export function safeEqual(a: string, b: string): boolean {
 export type AppTokenVerdict = 'accept' | 'forbidden' | 'unconfigured'
 
 /**
- * Проверка `application_token` (fail-closed).
- * • Установка: если токен задан в окружении — сверяем с ним; иначе первый непустой принимается.
- * • Остальные события: нужен ожидаемый токен (окружение или сохранённый при установке);
- *   нет ни того, ни другого — `unconfigured` (503), а не «поверим на слово».
+ * Verifies the `application_token` (fail-closed).
+ * - Install: if a token is set in the environment — compare against it; otherwise the first
+ *   non-empty value is accepted.
+ * - Other events: an expected token is required (from the environment or saved at install);
+ *   if neither exists — `unconfigured` (503), not "take it on faith".
  */
 export function appTokenVerdict(opts: { isInstall: boolean, incoming: string, envToken?: string, storedToken?: string }): AppTokenVerdict {
   const envToken = opts.envToken ?? ''
@@ -71,11 +72,11 @@ export interface EventAuth {
   accessToken: string
   refreshToken: string
   expiresIn: number
-  /** `auth[server_endpoint]` — сервер авторизации портала; `''`, если поля нет. */
+  /** `auth[server_endpoint]` — the portal's authorization server; `''` if the field is absent. */
   serverEndpoint: string
 }
 
-/** Блок `auth` события. Бросает, если нет домена, member_id или application_token. */
+/** Parses the event's `auth` block. Throws if domain, member_id, or application_token is missing. */
 export function parseEventAuth(payload: unknown): EventAuth {
   const a = (payload as { auth?: unknown } | null)?.auth as Record<string, unknown> | undefined
   if (!a || typeof a !== 'object') throw new Error('B24 event: missing auth block')

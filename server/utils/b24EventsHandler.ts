@@ -1,7 +1,7 @@
-// Решение по входящему событию портала — чистая функция над внедряемыми зависимостями, чтобы
-// ветки установки/удаления проверялись тестом целиком (находка тестировщика панели: обработчик
-// не тестировался). Nitro-обработчик `server/api/b24/events.post.ts` только читает тело и
-// подставляет живые зависимости. Контракт — docs/B24_EVENTS.md.
+// Decision logic for an incoming portal event — a pure function over injectable dependencies, so
+// the install/uninstall branches can be fully covered by tests (finding from the panel's QA:
+// the handler wasn't tested). The Nitro handler `server/api/b24/events.post.ts` only reads the
+// body and wires in live dependencies. Contract — docs/B24_EVENTS.md.
 
 import { assertPortalHost, resolveOAuthHost } from './b24Host'
 import { appTokenVerdict, B24_EVENT_INSTALL, B24_EVENT_UNINSTALL, eventCode, parseBracketForm, parseEventAuth } from './b24Events'
@@ -10,28 +10,29 @@ import { verifyInstallMember, type OAuthCreds } from './verifyInstallMember'
 
 export interface EventDeps {
   kv: KeyValue
-  /** `B24_APPLICATION_TOKEN` из окружения, `''` — не задан. */
+  /** `B24_APPLICATION_TOKEN` from the environment, `''` — unset. */
   envToken: string
   creds: OAuthCreds
-  /** Обновление refresh-токена на сервере авторизации `oauthHost` (verifyInstallMember.rawOauthRefresh). */
+  /** Refreshes the refresh token on the authorization server `oauthHost` (verifyInstallMember.rawOauthRefresh). */
   refresh: (refreshToken: string, oauthHost: string) => Promise<unknown>
   /**
-   * Лимит адреса отправителя: можно ли обработать событие установки или удаления; `false` — 429.
-   * Спрашивается ТОЛЬКО для этих двух событий: прочие не стоят ничего, и раньше они выжигали
-   * лимит — чужой портал, подписав наш адрес на поток своих событий, мог заблокировать чужие
-   * установки (находка /code-review).
+   * Sender address limit: whether an install or uninstall event can be processed; `false` — 429.
+   * Checked ONLY for these two events: others cost nothing, and used to burn through this limit —
+   * another portal, by subscribing our address to a flood of its events, could block other
+   * portals' installs (finding of /code-review).
    */
   allowEvent?: () => boolean
   /**
-   * Общий потолок сверок установки (`OAUTH_VERIFY_GLOBAL`): спрашивается прямо перед запросом к
-   * серверу авторизации, после всех проверок; `false` — 429. Мусор и удаления его не тратят.
+   * Global cap on install verifications (`OAUTH_VERIFY_GLOBAL`): checked right before the request
+   * to the authorization server, after all other checks; `false` — 429. Garbage and uninstalls
+   * don't spend it.
    */
   allowVerification?: () => boolean
-  /** Окружение для SSRF-гарда (`B24_SELFHOSTED_HOSTS`). */
+  /** Environment for the SSRF guard (`B24_SELFHOSTED_HOSTS`). */
   env?: Record<string, string | undefined>
-  /** Строка в журнал (без токенов). */
+  /** Log line (no tokens). */
   log?: (line: string) => void
-  /** Строка в журнал ошибок: то, на что должен сработать мониторинг. */
+  /** Error log line: what monitoring should alert on. */
   warn?: (line: string) => void
 }
 
@@ -40,7 +41,7 @@ export interface EventResult {
   body: Record<string, unknown>
 }
 
-/** Разбирает тело события и решает, что сделать. Не бросает на недоверенном вводе. */
+/** Parses the event body and decides what to do. Never throws on untrusted input. */
 export async function handleB24Event(rawBody: string, deps: EventDeps): Promise<EventResult> {
   const log = deps.log ?? (() => {})
   const warn = deps.warn ?? log
@@ -55,7 +56,7 @@ export async function handleB24Event(rawBody: string, deps: EventDeps): Promise<
   let domain: string
   try {
     auth = parseEventAuth(payload)
-    // Дальше везде — ЧИСТЫЙ хост из гарда, а не сырой ввод: по нему же ищет frameAuth.
+    // From here on, always use the CLEAN host from the guard, not the raw input: frameAuth looks up by it too.
     domain = assertPortalHost(auth.domain, deps.env)
   } catch {
     return { status: 400, body: { error: 'malformed event' } }
@@ -65,7 +66,7 @@ export async function handleB24Event(rawBody: string, deps: EventDeps): Promise<
     const stored = await getPortal(deps.kv, auth.memberId)
     const verdict = appTokenVerdict({ isInstall: false, incoming: auth.applicationToken, envToken: deps.envToken, storedToken: stored?.applicationToken })
     if (verdict !== 'accept') return { status: verdict === 'unconfigured' ? 503 : 403, body: { error: `application_token ${verdict}` } }
-    // Удалили приложение — не держим о портале ничего.
+    // The app was uninstalled — keep nothing about this portal.
     await removePortal(deps.kv, auth.memberId)
     log(`uninstall member_id=${auth.memberId}`)
     return { status: 200, body: { ok: true } }
@@ -74,8 +75,9 @@ export async function handleB24Event(rawBody: string, deps: EventDeps): Promise<
   const verdict = appTokenVerdict({ isInstall: true, incoming: auth.applicationToken, envToken: deps.envToken })
   if (verdict !== 'accept') return { status: 403, body: { error: `application_token ${verdict}` } }
 
-  // ⚠ Fail-closed без реквизитов OAuth. Замер 2026-09-24 (docs/B24_EVENTS.md): без сверки
-  // повторная «установка» с тем же member_id и ЧУЖИМИ токенами перезаписывала токены портала.
+  // Warning: fail-closed without OAuth credentials. Measured 2026-09-24 (docs/B24_EVENTS.md):
+  // without verification, a repeated "install" with the same member_id but SOMEONE ELSE'S tokens
+  // would overwrite the portal's tokens.
   if (!deps.creds.clientId || !deps.creds.clientSecret) {
     warn('B24_CLIENT_ID/B24_CLIENT_SECRET not set — install NOT stored')
     return { status: 503, body: { error: 'server not configured' } }

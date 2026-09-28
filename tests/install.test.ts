@@ -3,30 +3,30 @@ import { absoluteHandler, eventBindCalls, missingScopes, staleEventHandlers } fr
 
 const SITE = 'https://aiconnect.example.com'
 
-describe('адреса обработчиков', () => {
-  it('только абсолютный https', () => {
+describe('handler addresses', () => {
+  it('absolute https only', () => {
     expect(absoluteHandler(SITE, '/api/b24/events')).toBe('https://aiconnect.example.com/api/b24/events')
     expect(absoluteHandler('http://aiconnect.example.com', '/api/b24/events')).toBeNull()
     expect(absoluteHandler('', '/api/b24/events')).toBeNull()
   })
 })
 
-describe('подписки на события', () => {
-  it('подписывает только недостающие', () => {
+describe('event subscriptions', () => {
+  it('subscribes only what is missing', () => {
     const existing = [{ event: 'onappinstall', handler: `${SITE}/api/b24/events` }]
     expect(eventBindCalls(SITE, existing).map(c => c.params.event)).toEqual(['ONAPPUNINSTALL'])
   })
 
-  it('без адреса приложения не подписывает ничего', () => {
+  it('subscribes nothing without an app address', () => {
     expect(eventBindCalls('', [])).toEqual([])
   })
 
-  it('подписка на чужой адрес не считается', () => {
+  it('a subscription at another address does not count', () => {
     const existing = [{ event: 'ONAPPINSTALL', handler: 'https://old.example.com/api/b24/events' }]
     expect(eventBindCalls(SITE, existing)).toHaveLength(2)
   })
 
-  it('подписки со старым адресом снимаем; текущие и чужие события не трогаем', () => {
+  it('removes subscriptions with a stale address; leaves current and unrelated events untouched', () => {
     const existing = [
       { event: 'onappinstall', handler: 'https://old.example.com/api/b24/events' },
       { event: 'ONAPPUNINSTALL', handler: `${SITE}/api/b24/events` },
@@ -39,8 +39,8 @@ describe('подписки на события', () => {
   })
 })
 
-describe('права приложения', () => {
-  it('нужны ровно ai_admin и user_brief', () => {
+describe('application scopes', () => {
+  it('needs exactly ai_admin and user_brief', () => {
     expect(missingScopes(null)).toEqual(['ai_admin', 'user_brief'])
     expect(missingScopes(['user_brief'])).toEqual(['ai_admin'])
     expect(missingScopes(['ai_admin', 'user_brief', 'crm'])).toEqual([])

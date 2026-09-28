@@ -13,7 +13,7 @@ function memoryKv(): KeyValue & { data: Map<string, unknown> } {
   }
 }
 
-/** Тело события в той же PHP-скобочной форме, в какой его шлёт портал. */
+/** Event body in the same PHP bracket-array form the portal sends it in. */
 function body(event: string, auth: Record<string, string>): string {
   const form = new URLSearchParams({ event })
   for (const [k, v] of Object.entries(auth)) form.set(`auth[${k}]`, v)
@@ -30,7 +30,7 @@ const installAuth = {
   server_endpoint: 'https://oauth.bitrix24.tech/rest/'
 }
 
-/** OAuth-сервер, который знает один настоящий грант: портал m1 на demo.bitrix24.ru. */
+/** OAuth server that knows one real grant: portal m1 on demo.bitrix24.ru. */
 const realGrant = { access_token: 'rotated-access', refresh_token: 'rotated-refresh', expires_in: 3600, member_id: 'm1', client_endpoint: 'https://demo.bitrix24.ru/rest/' }
 
 type TestDeps = EventDeps & { kv: ReturnType<typeof memoryKv>, lines: string[], warnings: string[] }
@@ -60,15 +60,15 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-describe('события, которые мы не обрабатываем', () => {
-  it('чужое или пустое событие — 200 и ничего не меняем', async () => {
+describe('events we do not handle', () => {
+  it('unrelated or empty event — 200 and nothing changes', async () => {
     const d = deps()
     expect(await handleB24Event(body('ONCRMDEALUPDATE', installAuth), d)).toEqual({ status: 200, body: { ok: true, ignored: 'ONCRMDEALUPDATE' } })
     expect(await handleB24Event('', d)).toEqual({ status: 200, body: { ok: true, ignored: 'empty' } })
     expect(d.kv.data.size).toBe(0)
   })
 
-  it('посторонние события НЕ тратят лимит установок', async () => {
+  it('unrelated events do NOT consume the install limit', async () => {
     const allowEvent = vi.fn(() => true)
     const d = deps({ allowEvent })
     for (let i = 0; i < 100; i++) await handleB24Event(body('ONTASKUPDATE', installAuth), d)
@@ -77,7 +77,7 @@ describe('события, которые мы не обрабатываем', ()
     expect(allowEvent).toHaveBeenCalledTimes(1)
   })
 
-  it('общий потолок сверок тратят только сверки: мусор и удаления — нет', async () => {
+  it('the shared verification cap is spent only by verifications: garbage and uninstalls do not', async () => {
     const allowVerification = vi.fn(() => true)
     const d = deps({ allowVerification })
     await handleB24Event('event=ONAPPINSTALL', d)
@@ -89,14 +89,14 @@ describe('события, которые мы не обрабатываем', ()
     expect(allowVerification).toHaveBeenCalledTimes(1)
   })
 
-  it('потолок сверок исчерпан — 429 и в журнал ошибок, в OAuth не ходим', async () => {
+  it('verification cap exhausted — 429 and logged as a warning, no OAuth call', async () => {
     const d = deps({ allowVerification: () => false })
     expect((await handleB24Event(body('ONAPPINSTALL', installAuth), d)).status).toBe(429)
     expect(d.refresh).not.toHaveBeenCalled()
     expect(d.warnings.join('\n')).toMatch(/verification capacity/)
   })
 
-  it('лимит установок исчерпан — 429, в OAuth не ходим, ничего не пишем', async () => {
+  it('install limit exhausted — 429, no OAuth call, nothing written', async () => {
     const d = deps({ allowEvent: () => false })
     expect(await handleB24Event(body('ONAPPINSTALL', installAuth), d)).toEqual({ status: 429, body: { error: 'too many install events' } })
     expect(d.refresh).not.toHaveBeenCalled()
@@ -104,8 +104,8 @@ describe('события, которые мы не обрабатываем', ()
   })
 })
 
-describe('установка (ONAPPINSTALL)', () => {
-  it('сохраняет РОТИРОВАННЫЕ токены и домен из гранта; в журнале нет токенов', async () => {
+describe('install (ONAPPINSTALL)', () => {
+  it('saves the ROTATED tokens and domain from the grant; no tokens in the log', async () => {
     const d = deps()
     const res = await handleB24Event(body('ONAPPINSTALL', installAuth), d)
     expect(res).toEqual({ status: 200, body: { ok: true } })
@@ -117,7 +117,7 @@ describe('установка (ONAPPINSTALL)', () => {
     expect(d.lines.join('\n')).not.toMatch(/access|refresh|app-secret/)
   })
 
-  it('без auth, без member_id или с доменом не Битрикс24 — 400, в OAuth не ходим', async () => {
+  it('no auth, no member_id, or domain is not Bitrix24 — 400, no OAuth call', async () => {
     const d = deps()
     expect((await handleB24Event('event=ONAPPINSTALL', d)).status).toBe(400)
     expect((await handleB24Event(body('ONAPPINSTALL', { ...installAuth, member_id: '' }), d)).status).toBe(400)
@@ -126,13 +126,13 @@ describe('установка (ONAPPINSTALL)', () => {
     expect(d.kv.data.size).toBe(0)
   })
 
-  it('токен приложения не совпал с B24_APPLICATION_TOKEN — 403', async () => {
+  it('application token does not match B24_APPLICATION_TOKEN — 403', async () => {
     const d = deps({ envToken: 'expected' })
     expect((await handleB24Event(body('ONAPPINSTALL', installAuth), d)).status).toBe(403)
     expect(d.kv.data.size).toBe(0)
   })
 
-  it('задан только один из B24_CLIENT_ID/SECRET — тоже 503, а не попытка сверки', async () => {
+  it('only one of B24_CLIENT_ID/SECRET is set — also 503, not an attempted verification', async () => {
     for (const creds of [{ clientId: 'cid', clientSecret: '' }, { clientId: '', clientSecret: 'cs' }]) {
       const d = deps({ creds })
       expect((await handleB24Event(body('ONAPPINSTALL', installAuth), d)).status).toBe(503)
@@ -140,7 +140,7 @@ describe('установка (ONAPPINSTALL)', () => {
     }
   })
 
-  it('без B24_CLIENT_ID/SECRET установка НЕ сохраняется — 503 (fail-closed), в журнал ошибок', async () => {
+  it('without B24_CLIENT_ID/SECRET the install is NOT saved — 503 (fail-closed), logged as a warning', async () => {
     const d = deps({ creds: { clientId: '', clientSecret: '' } })
     expect((await handleB24Event(body('ONAPPINSTALL', installAuth), d)).status).toBe(503)
     expect(d.refresh).not.toHaveBeenCalled()
@@ -148,14 +148,14 @@ describe('установка (ONAPPINSTALL)', () => {
     expect(d.warnings.join('\n')).toMatch(/B24_CLIENT_ID/)
   })
 
-  it('сервер авторизации — тот, что назвал портал, если он из списка; сохраняется с установкой', async () => {
+  it('auth server — the one the portal named, if allow-listed; saved with the install', async () => {
     const d = deps()
     await handleB24Event(body('ONAPPINSTALL', { ...installAuth, server_endpoint: 'https://oauth.bitrix.info/rest/' }), d)
     expect(d.refresh).toHaveBeenCalledWith('sent-refresh', 'oauth.bitrix.info')
     expect((await getPortal(d.kv, 'm1'))?.oauthHost).toBe('oauth.bitrix.info')
   })
 
-  it('сервер авторизации не из списка — 403, в OAuth не ходим, предупреждение в журнал', async () => {
+  it('auth server not allow-listed — 403, no OAuth call, warning logged', async () => {
     const d = deps()
     const res = await handleB24Event(body('ONAPPINSTALL', { ...installAuth, server_endpoint: 'https://evil.com/rest/' }), d)
     expect(res.status).toBe(403)
@@ -164,7 +164,7 @@ describe('установка (ONAPPINSTALL)', () => {
     expect(d.warnings.join('\n')).toMatch(/not allow-listed/)
   })
 
-  it('чужой member_id со своим грантом — 403, запись жертвы не тронута', async () => {
+  it('another member_id with our own grant — 403, victim record untouched', async () => {
     const d = deps()
     await saveInstall(d.kv, { memberId: 'victim', domain: 'victim.bitrix24.ru', accessToken: 'va', refreshToken: 'vr', expiresIn: 3600, applicationToken: 'vt' })
     const res = await handleB24Event(body('ONAPPINSTALL', { ...installAuth, member_id: 'victim', domain: 'victim.bitrix24.ru' }), d)
@@ -172,7 +172,7 @@ describe('установка (ONAPPINSTALL)', () => {
     expect(accessTokenOf((await getPortal(d.kv, 'victim'))!)).toBe('va')
   })
 
-  it('свой member_id, но домен жертвы — 403, индекс домена жертвы не перехвачен', async () => {
+  it('own member_id but victim domain — 403, victim domain index not hijacked', async () => {
     const d = deps()
     await saveInstall(d.kv, { memberId: 'victim', domain: 'victim.bitrix24.ru', accessToken: 'va', refreshToken: 'vr', expiresIn: 3600, applicationToken: 'vt' })
     const res = await handleB24Event(body('ONAPPINSTALL', { ...installAuth, domain: 'victim.bitrix24.ru' }), d)
@@ -181,7 +181,7 @@ describe('установка (ONAPPINSTALL)', () => {
     expect(await getPortal(d.kv, 'm1')).toBeNull()
   })
 
-  it('OAuth недоступен — 503, ничего не сохранено', async () => {
+  it('OAuth unreachable — 503, nothing saved', async () => {
     const d = deps({ refresh: async () => {
       throw new Error('ECONNRESET')
     } })
@@ -189,7 +189,7 @@ describe('установка (ONAPPINSTALL)', () => {
     expect(d.kv.data.size).toBe(0)
   })
 
-  it('переустановка не подменяет application_token', async () => {
+  it('reinstall does not overwrite application_token', async () => {
     const d = deps()
     await handleB24Event(body('ONAPPINSTALL', installAuth), d)
     await handleB24Event(body('ONAPPINSTALL', { ...installAuth, application_token: 'other' }), d)
@@ -197,24 +197,24 @@ describe('установка (ONAPPINSTALL)', () => {
   })
 })
 
-describe('удаление (ONAPPUNINSTALL)', () => {
+describe('uninstall (ONAPPUNINSTALL)', () => {
   const uninstall = (token: string) => body('ONAPPUNINSTALL', { domain: 'demo.bitrix24.ru', member_id: 'm1', application_token: token })
 
-  it('верный токен — запись и индекс удалены', async () => {
+  it('correct token — record and index removed', async () => {
     const d = deps()
     await handleB24Event(body('ONAPPINSTALL', installAuth), d)
     expect(await handleB24Event(uninstall('app-secret'), d)).toEqual({ status: 200, body: { ok: true } })
     expect(d.kv.data.size).toBe(0)
   })
 
-  it('чужой токен — 403, запись на месте', async () => {
+  it('wrong token — 403, record left in place', async () => {
     const d = deps()
     await handleB24Event(body('ONAPPINSTALL', installAuth), d)
     expect((await handleB24Event(uninstall('guess'), d)).status).toBe(403)
     expect(await getPortal(d.kv, 'm1')).not.toBeNull()
   })
 
-  it('портал нам неизвестен и токена в окружении нет — 503, а не «удалим на слово»', async () => {
+  it('unknown portal and no token in the environment — 503, not "delete on say-so"', async () => {
     expect((await handleB24Event(uninstall('any'), deps())).status).toBe(503)
   })
 })

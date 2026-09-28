@@ -1,6 +1,6 @@
-// Общая подготовка смок-набора (vitest globalSetup): окружение и страж портала.
-// Нет файла или вебхука — `smokeEnv: null`, и наборы пропускаются: `pnpm smoke` без окружения
-// ничего не делает и не падает.
+// Shared smoke suite setup (vitest globalSetup): environment and portal guard.
+// No file or webhook — `smokeEnv: null`, and suites are skipped: `pnpm smoke` with no environment
+// does nothing and does not fail.
 
 import { readFileSync } from 'node:fs'
 import type { TestProject } from 'vitest/node'

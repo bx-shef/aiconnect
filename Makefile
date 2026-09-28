@@ -1,48 +1,49 @@
 .PHONY: build-local prod-up prod-down prod-pull prod-redeploy logs ps health doctor backup proxy-timeout \
         compose-update self-update help
 
-# Голый `make` на сервере печатает справку, а не запускает первую цель.
+# A bare `make` on the server prints help instead of running the first target.
 .DEFAULT_GOAL := help
 
-# Обёртки над командами выката — как в эталоне client-bank-alfa-by. Подробности — docs/DEPLOY.md.
-# Прод-цели читают ./.env рядом с docker-compose.prod.yml (DOMAIN, ключи — см. .env.example).
+# Wrappers over deploy commands — as in the client-bank-alfa-by reference. Details — docs/DEPLOY.md.
+# Prod targets read ./.env next to docker-compose.prod.yml (DOMAIN, keys — see .env.example).
 
-# От чего защищаемся (ревью безопасности на #16):
-# - окружение общего хоста: чужой экспортированный DOMAIN, REF, PROXY… не должен ничего менять —
-#   внешние значения REF, PROXY, PROXY_TIMEOUT, CONFIRM берутся только из командной строки make;
-# - значения, которые вставляют из чужих сообщений как есть (`REF=<ветка>`, `CONFIRM=<sha256>`):
-#   берутся как текст ($(value …) — иначе make сам выполнил бы `$(shell …)` из значения ещё до
-#   оболочки), в рецепт приходят переменными окружения, а не текстом команды, и проверяются по формату.
-# От чего НЕ защищаемся: командная строка make — это команды оператора. `REF:=$(shell …)`, любая
-# другая переменная с `$(…)`, `SHELL=` выполнят что угодно, и Makefile это не остановит. То же —
-# MAKEFLAGS в окружении: make считает его командной строкой и разбирает ДО чтения этого файла. На
-# сервере MAKEFLAGS в окружении быть не должно (docs/DEPLOY.md).
-# override — у всего, что исполняется или проверяет: иначе переменная с тем же именем заменила бы
-# функцию проверки или сами команды (как APP_CONTAINER ниже).
-#   $(call cli,ИМЯ,умолчание)
+# What we defend against (security review in #16):
+# - shared host environment: another exported DOMAIN, REF, PROXY… must not change anything —
+#   external REF, PROXY, PROXY_TIMEOUT, CONFIRM values are taken only from the make command line;
+# - values pasted verbatim from someone else's messages (`REF=<branch>`, `CONFIRM=<sha256>`):
+#   taken as text ($(value …) — otherwise make itself would run `$(shell …)` from the value before
+#   the shell even sees it), reach the recipe as environment variables, not command text, and are
+#   validated by format.
+# What we do NOT defend against: the make command line is the operator's own commands. `REF:=$(shell …)`,
+# any other variable with `$(…)`, `SHELL=` will run anything, and the Makefile won't stop it. Same for
+# MAKEFLAGS in the environment: make treats it as a command line and parses it BEFORE reading this file.
+# On the server, MAKEFLAGS must not be set in the environment (docs/DEPLOY.md).
+# override — on everything that executes or checks: otherwise a variable of the same name would
+# replace the check function or the commands themselves (like APP_CONTAINER below).
+#   $(call cli,NAME,default)
 override cli = $(if $(filter command line,$(origin $(1))),$(value $(1)),$(2))
-# Переменные командной строки make сам кладёт в окружение каждой команды и для этого раскрывает их
-# значение — `$(shell …)` в нём сработал бы там. unexport: в рецепт они попадают только копиями
-# через cli (U_REF, PT_*, CU_CONFIRM), уже как текст.
+# make itself puts command-line variables into every command's environment, and expands their value
+# to do so — `$(shell …)` inside it would run there. unexport: they reach the recipe only as copies
+# through cli (U_REF, PT_*, CU_CONFIRM), already as text.
 unexport REF PROXY PROXY_TIMEOUT CONFIRM
-# compose подставляет ${DOMAIN}, ${LETSENCRYPT_EMAIL} и ${B24_TOKEN_ENC_KEY} из окружения оболочки
-# РАНЬШЕ, чем из ./.env: экспортированный на общем хосте DOMAIN соседнего проекта увёл бы наш
-# VIRTUAL_HOST (и сертификат) на чужой домен. Поэтому compose запускается без них — источник один, ./.env.
+# compose substitutes ${DOMAIN}, ${LETSENCRYPT_EMAIL} and ${B24_TOKEN_ENC_KEY} from the shell
+# environment BEFORE ./.env: on a shared host, a neighbour project's exported DOMAIN would steer our
+# VIRTUAL_HOST (and certificate) to the wrong domain. So compose runs without them — one source, ./.env.
 override COMPOSE_ENV = env -u DOMAIN -u LETSENCRYPT_EMAIL -u B24_TOKEN_ENC_KEY docker compose
 override COMPOSE = $(COMPOSE_ENV) -f docker-compose.prod.yml
-# Имя контейнера приложения — container_name в docker-compose.prod.yml (сверяет tests/makefileProd.test.ts).
-# override: ни `make … APP_CONTAINER=…`, ни MAKEFLAGS не подменят, чей VIRTUAL_HOST берёт proxy-timeout.
+# App container name — container_name in docker-compose.prod.yml (checked by tests/makefileProd.test.ts).
+# override: neither `make … APP_CONTAINER=…` nor MAKEFLAGS can substitute whose VIRTUAL_HOST proxy-timeout reads.
 override APP_CONTAINER := aiconnect
 
-# Общие shell-функции целей. make склеивает `\`-переносы присваивания в одну строку, поэтому
-# команды разделены `;`. Ошибку функции кладут в $$err и возвращают 1.
-#   app_domain — d: VIRTUAL_HOST работающего контейнера приложения (одна строка, формат домена);
-#   find_proxy — p: запущенный контейнер nginx-proxy — PROXY из командной строки или единственный,
-#                чей образ называется ровно nginx-proxy (nginxproxy/nginx-proxy:1.7, jwilder/nginx-proxy):
-#                подстрока приняла бы и чужой образ вроде nginx-proxy-dashboard. Образ — из inspect
-#                (.Config.Image): в `docker ps` после pull нового образа вместо имени виден его ID
-#                (ревью на #16);
-#   check_ref  — U_REF: имя ветки или тега для адреса raw.githubusercontent.com.
+# Shared shell functions for targets. make joins `\`-continued assignment lines into one, so
+# commands are separated by `;`. A function's error goes into $$err and it returns 1.
+#   app_domain — d: VIRTUAL_HOST of the running app container (single line, domain format);
+#   find_proxy — p: the running nginx-proxy container — PROXY from the command line, or the single
+#                one whose image is named exactly nginx-proxy (nginxproxy/nginx-proxy:1.7, jwilder/nginx-proxy):
+#                a substring match would also accept an unrelated image like nginx-proxy-dashboard. Image
+#                comes from inspect (.Config.Image): in `docker ps` after pulling a new image, its ID
+#                shows instead of the name (review in #16);
+#   check_ref  — U_REF: branch or tag name for the raw.githubusercontent.com address.
 override SH_LIB = one_line() { [ "$$(printf '%s' "$$1" | wc -l)" -eq 0 ]; }; \
 	app_domain() { \
 	  d=$$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' $(APP_CONTAINER) 2>/dev/null | sed -n 's/^VIRTUAL_HOST=//p'); \
@@ -64,15 +65,15 @@ override SH_LIB = one_line() { [ "$$(printf '%s' "$$1" | wc -l)" -eq 0 ]; }; \
 	    || { err="REF — имя ветки или тега (буквы, цифры, . _ / -): '$$U_REF'"; return 1; }; \
 	};
 
-# ─── Локально ────────────────────────────────────────────────────────
+# ─── Local ───────────────────────────────────────────────────────────
 
 ## Собрать образ из исходников и запустить на 127.0.0.1:3000 на переднем плане (docker-compose.yml)
 build-local:
 	docker compose up --build
 
-# ─── Прод (на сервере, /home/bitrix/aiconnect) ──────────────
-# Нужны общий nginx-proxy + acme-companion, Watchtower и docker-сеть proxy-net на хосте.
-# Свой Watchtower НЕ поднимаем — хостовый подхватывает контейнер по метке.
+# ─── Prod (on the server, /home/bitrix/aiconnect) ────────────
+# Requires the shared nginx-proxy + acme-companion, Watchtower, and docker network proxy-net on the host.
+# We do NOT run our own Watchtower — the host's one picks up the container by label.
 
 ## Запустить / обновить контейнер приложения
 prod-up:
@@ -88,8 +89,8 @@ prod-pull:
 
 ## Обновить прямо сейчас, не дожидаясь Watchtower
 #
-# Чистим только свои висящие образы (метка source ставится при сборке в CI): хост общий, и чужие
-# проекты свои образы убирают сами.
+# We only clean our own dangling images (the source label is set at build time in CI): the host is
+# shared, and other projects clean up their own images themselves.
 prod-redeploy:
 	$(COMPOSE) pull && \
 	$(COMPOSE) up -d && \
@@ -105,28 +106,28 @@ ps:
 
 ## Что не настроено на сервере: GET /api/health изнутри контейнера (флаги «задано / нет», без секретов)
 #
-# Проверку через прокси (request.forwardedFor = used) делайте снаружи:
+# Check through the proxy (request.forwardedFor = used) from outside:
 #   curl -s https://<DOMAIN>/api/health
 health:
 	$(COMPOSE) exec -T app node -e "fetch('http://127.0.0.1:3000/api/health').then(r => r.text()).then(t => console.log(t))"
 
 ## Проверить выкат одной командой: контейнер, настройки, прокси, https, сертификат, Watchtower, диск
 #
-#   make doctor               # только читает, ничего не меняет
-#   make doctor PROXY=<имя>   # если прокси не нашёлся или их несколько
+#   make doctor               # read-only, changes nothing
+#   make doctor PROXY=<name>  # if the proxy wasn't found, or there are several
 #
-# Как в эталоне client-bank (make doctor): одна команда вместо ручного обхода. Каждая строка — ✓,
-# ✗ (после «→» — что делать; есть ✗ — make завершится с ошибкой) или ⚠ (проверить нечем — не
-# ошибка, но и не «всё в порядке»). Что проверяет, кроме контейнера:
-# - /api/health изнутри: сборка и что не задано — в .env или в compose-файле;
-# - прокси ходит в приложение без keepalive — иначе 502 на POST из портала (метка в compose) — и
-#   видит хотя бы один рабочий сервер приложения;
-# - таймаут прокси для домена подключён (make proxy-timeout);
-# - https снаружи отвечает и видит адрес клиента; сертификат доверенный, на наш домен и не
-#   истекает в ближайшие 14 дней;
-# - Watchtower запущен; диск с каталогом данных docker занят меньше чем на 90 %.
-# https проверяется с самого сервера: если он не видит себя по внешнему адресу, проверьте с другого
-# компьютера — curl -s https://<домен>/api/health.
+# Like the client-bank reference (make doctor): one command instead of a manual walkthrough. Each
+# line is ✓, ✗ (after "→" — what to do; any ✗ makes make exit with an error), or ⚠ (nothing to check
+# with — not an error, but not "all fine" either). What it checks, besides the container:
+# - /api/health from inside: the build, and what's unset — in .env or in the compose file;
+# - the proxy reaches the app without keepalive — otherwise 502 on POST from the portal (label in
+#   compose) — and sees at least one working app server;
+# - the proxy timeout for the domain is wired up (make proxy-timeout);
+# - https responds from outside and sees the client address; the certificate is trusted, for our
+#   domain, and not expiring within the next 14 days;
+# - Watchtower is running; the disk holding docker's data directory is under 90% full.
+# https is checked from the server itself: if it can't see itself at the external address, check
+# from another computer — curl -s https://<domain>/api/health.
 doctor: export PT_PROXY = $(call cli,PROXY,)
 doctor:
 	@$(SH_LIB) \
@@ -188,7 +189,7 @@ doctor:
 
 ## Копия тома с токенами установки в ./backups (токены в нём зашифрованы B24_TOKEN_ENC_KEY)
 #
-# Без ключа копия бесполезна, ключ — отдельно и вне сервера. Восстановление — docs/DEPLOY.md.
+# Without the key the copy is useless; keep the key separately and off the server. Restore — docs/DEPLOY.md.
 backup:
 	@mkdir -p backups && f="backups/portals-$$(date +%Y%m%d-%H%M%S).tgz" \
 	  && { $(COMPOSE) exec -T app tar czf - -C /app/.data . > "$$f" || { rm -f "$$f"; exit 1; }; } \
@@ -196,25 +197,27 @@ backup:
 
 ## Поднять таймаут общего nginx-proxy для нашего домена (по умолчанию он ждёт 60 с)
 #
-#   make proxy-timeout                      # прокси найдётся по образу *nginx-proxy* (не acme/companion)
-#   make proxy-timeout PROXY=<имя>          # если прокси не нашёлся или их несколько
-#   make proxy-timeout PROXY_TIMEOUT=600s   # другой таймаут (по умолчанию 400s)
+#   make proxy-timeout                      # proxy is found by its image *nginx-proxy* (not acme/companion)
+#   make proxy-timeout PROXY=<name>         # if the proxy wasn't found, or there are several
+#   make proxy-timeout PROXY_TIMEOUT=600s   # a different timeout (default 400s)
 #
-# Унаследовано от шаблона, где модель отвечала синхронно. Протокол ai.engine асинхронный (202 за
-# 5 с, ответ — отдельным POST на callbackUrl, docs/RESEARCH.md), так что долгий таймаут, вероятно,
-# не понадобится; решится на этапе 2 docs/PLAN.md.
+# Inherited from a template where the model answered synchronously. The ai.engine protocol is
+# asynchronous (202 in 5s, the answer arrives as a separate POST to callbackUrl, docs/RESEARCH.md),
+# so a long timeout is probably not needed; to be settled at stage 2 of docs/PLAN.md.
 #
-# nginx-proxy подключает /etc/nginx/vhost.d/<домен>_location в блок location нашего домена, когда
-# перестраивает конфиг. Цель:
-# - берёт домен из VIRTUAL_HOST работающего контейнера приложения — того, что прокси реально
-#   обслуживает, а не из разбора .env;
-# - дописывает в файл строку таймаута, сохраняя другие директивы; новый файл начинает с содержимого
-#   default_location, иначе общие настройки прокси перестали бы действовать на наш домен;
-# - перестраивает конфиг прямо в прокси (docker-gen → nginx -t → reload), не трогая приложение, и
-#   проверяет, что файл подключён. Уже настроено — ничего не пишет, только nginx -t и мягкий reload:
-#   так повторный запуск чинит случай, когда в прошлый раз упал reload (ревью на #16).
-# Значения передаются аргументами, а не текстом команд, и проверяются по формату (ревью безопасности
-# на #16). PROXY и PROXY_TIMEOUT — только из командной строки make и только как текст (cli вверху файла).
+# nginx-proxy includes /etc/nginx/vhost.d/<domain>_location in our domain's location block when it
+# rebuilds its config. The target:
+# - takes the domain from the VIRTUAL_HOST of the running app container — the one the proxy actually
+#   serves, not from parsing .env;
+# - appends the timeout line to the file, keeping other directives; a new file starts from the
+#   contents of default_location, otherwise the proxy's shared settings would stop applying to our
+#   domain;
+# - rebuilds the config right inside the proxy (docker-gen → nginx -t → reload) without touching the
+#   app, and checks that the file is included. Already configured — writes nothing, only nginx -t and
+#   a soft reload: that way a repeat run fixes the case where reload failed last time (review in #16).
+# Values are passed as arguments, not as command text, and validated by format (security review in
+# #16). PROXY and PROXY_TIMEOUT come only from the make command line, and only as text (cli at the top
+# of this file).
 proxy-timeout: export PT_TIMEOUT = $(call cli,PROXY_TIMEOUT,400s)
 proxy-timeout: export PT_PROXY = $(call cli,PROXY,)
 proxy-timeout:
@@ -248,20 +251,22 @@ proxy-timeout:
 
 ## Обновить docker-compose.prod.yml из репозитория: показать разницу, заменить — подтвердив её sha256
 #
-#   make compose-update                   # скачать и показать, что изменится; файл не трогается
-#   make compose-update CONFIRM=<sha256>  # заменить именно показанное (команду печатает первый запуск),
-#                                         # копия прежнего — рядом; затем make prod-up
-#   make compose-update REF=<ветка>       # взять файл из ветки или тега, а не из main
+#   make compose-update                   # download and show what would change; file untouched
+#   make compose-update CONFIRM=<sha256>  # replace exactly what was shown (the command is printed by
+#                                         # the first run), the previous copy stays alongside; then make prod-up
+#   make compose-update REF=<branch>      # take the file from a branch or tag instead of main
 #
-# Как в эталоне client-bank (compose-update): репозитория на сервере нет, и новые настройки
-# контейнера (метки, переменные) приезжают только так — Watchtower обновляет образ, а не этот файл.
-# Скачанное проверяет сам compose (`config`) с нашим .env: битый файл не заменит рабочий. Пин
-# `:sha-…` (откат, пауза автообновлений) замена вернёт на `:latest` — это видно в разнице.
-# Подтверждение — sha256 показанного файла (12 знаков), а не «да»: между показом и заменой в ветку
-# мог прийти коммит, и тогда скачанное уже другое — отказ (ревью на #16). Файла ещё нет — ставит
-# его. Замена атомарная: временный файл лежит рядом (compose ищет .env возле compose-файла), получает
-# права прежнего (новый — 644: у mktemp только владельцу) и переименовывается поверх — оборванная
-# запись не оставит полфайла. При Ctrl+C временный файл убирается.
+# Like the client-bank reference (compose-update): there's no repo on the server, and new container
+# settings (labels, variables) arrive only this way — Watchtower updates the image, not this file.
+# The download is checked by compose itself (`config`) against our .env: a broken file won't replace
+# the working one. A `:sha-…` pin (rollback, pausing auto-updates) — a replacement would revert it to
+# `:latest`, and that shows up in the diff.
+# Confirmation is the sha256 of the shown file (12 chars), not a "yes": a commit could land on the
+# branch between the show and the replace, so the download would already differ — refused (review in
+# #16). If there's no file yet, it's installed. The replace is atomic: the temp file sits alongside
+# (compose looks for .env next to the compose file), takes on the previous file's permissions (a new
+# one gets 644: mktemp gives owner-only), and is renamed over it — a cut-off write won't leave a half
+# file. On Ctrl+C the temp file is removed.
 compose-update: export U_REF = $(call cli,REF,main)
 compose-update: export CU_CONFIRM = $(call cli,CONFIRM,)
 compose-update:
@@ -289,15 +294,16 @@ compose-update:
 
 ## Обновить САМ этот Makefile из репозитория (новые цели появляются на сервере только так)
 #
-#   make self-update                # из main
-#   make self-update REF=<ветка>    # из ветки или тега
+#   make self-update                # from main
+#   make self-update REF=<branch>   # from a branch or tag
 #
-# Репозитория на сервере нет: Makefile кладётся туда один раз и сам не обновляется. Скачанное
-# проверяется по признаку, который есть в любой версии файла (.PHONY и цель prod-redeploy), —
-# иначе проверка не пропустила бы как раз то обновление, ради которого написана (грабли эталона).
-# Вложенный make — буквально `make`, а не $(MAKE): строку с $(MAKE) make выполняет и под `make -n`,
-# и `make -n self-update` скачивал и заменял бы Makefile (ревью на #16). Замена — как у
-# compose-update: временный файл рядом, права прежнего, mv поверх.
+# There's no repo on the server: the Makefile is placed there once and doesn't update itself. The
+# download is checked against a marker present in every version of the file (.PHONY and the
+# prod-redeploy target) — otherwise the check wouldn't let through exactly the update it was written
+# for (the reference implementation's own pitfall). The nested make is literally `make`, not $(MAKE):
+# a line with $(MAKE) also runs under `make -n`, and `make -n self-update` would download and replace
+# the Makefile (review in #16). The replace works like compose-update's: temp file alongside, previous
+# permissions, mv over it.
 self-update: export U_REF = $(call cli,REF,main)
 self-update:
 	@$(SH_LIB) \
@@ -315,8 +321,8 @@ self-update:
 
 ## Список целей с описаниями
 #
-# Запоминает последнюю строку `##` и печатает её у ближайшей следующей цели: между описанием и
-# целью бывают строки комментария, и наивный `grep -B1` их терял.
+# Remembers the last `##` line and prints it at the nearest following target: comment lines can sit
+# between the description and the target, and a naive `grep -B1` would lose them.
 help:
 	@awk '/^## /{d=substr($$0,4)} \
 	      /^[A-Za-z0-9_][A-Za-z0-9_.-]*:/{if(d!=""){printf "  %-15s %s\n", substr($$1,1,length($$1)-1), d; d=""}}' \

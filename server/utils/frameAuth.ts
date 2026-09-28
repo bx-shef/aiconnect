@@ -1,16 +1,16 @@
-// Проверка фрейм-токена: кто прислал запрос к нашему /api.
+// Frame token verification: who sent this request to our /api.
 //
-// Браузер шлёт `Authorization: Bearer <access_token фрейма>` и `X-B24-Domain: <портал>`
-// (app/composables/useApi.ts). Сервер НЕ верит ни одному полю на слово:
-//   1) домен проходит SSRF-гард и должен принадлежать установке из нашего хранилища —
-//      иначе наш API был бы открыт любому порталу Битрикс24;
-//   2) токен проверяется живым вызовом `profile` (кто это и администратор ли он);
-//   3) токен обязан принадлежать НАШЕМУ приложению (`app.info.CODE` = `B24_APP_CODE`): фрейм-токен
-//      чужого приложения на том же портале тоже прошёл бы `profile`. Без `B24_APP_CODE` сервер
-//      отказывает (503), а не пропускает проверку — находка отдела безопасности панели;
-//   4) живые проверки ограничены по частоте (`allowLiveCheck`): поток случайных токенов иначе
-//      гонял бы наш сервер вызовами `profile` в чужой портал без меры.
-// Схема — как в эталонах (resolveFrameMember.ts / settingsHandler.ts), плюс пункты 3–4.
+// The browser sends `Authorization: Bearer <frame access_token>` and `X-B24-Domain: <portal>`
+// (app/composables/useApi.ts). The server does NOT take any field on faith:
+//   1) the domain passes the SSRF guard and must belong to an install in our store —
+//      otherwise our API would be open to any Bitrix24 portal;
+//   2) the token is checked with a live `profile` call (who this is and whether they're admin);
+//   3) the token must belong to OUR app (`app.info.CODE` = `B24_APP_CODE`): a frame token from
+//      another app on the same portal would also pass `profile`. Without `B24_APP_CODE` the
+//      server refuses (503) rather than skip the check — finding from the panel's security team;
+//   4) live checks are rate-limited (`allowLiveCheck`): otherwise a flood of random tokens would
+//      drive our server to call `profile` against someone else's portal without limit.
+// The scheme follows the reference apps (resolveFrameMember.ts / settingsHandler.ts), plus points 3-4.
 
 import { createHash } from 'node:crypto'
 import { assertPortalHost } from './b24Host'
@@ -31,7 +31,7 @@ export type FrameVerdict
   = | { ok: true, user: FrameUser }
     | { ok: false, status: 400 | 401 | 403 | 409 | 429 | 502 | 503, error: string }
 
-/** Заголовки запроса → домен и токен. `null` — чего-то нет или домен не портал Битрикс24. */
+/** Request headers → domain and token. `null` — something's missing, or the domain isn't a Bitrix24 portal. */
 export function extractFrameAuth(headers: { get: (name: string) => string | null | undefined }, env?: Record<string, string | undefined>): FrameAuth | null {
   const authz = headers.get('authorization') ?? ''
   const match = /^Bearer\s+(\S+)$/i.exec(authz.trim())
@@ -46,24 +46,25 @@ export function extractFrameAuth(headers: { get: (name: string) => string | null
 
 export interface VerifyDeps {
   kv: KeyValue
-  /** REST-вызов от имени фрейм-токена (b24Client.makeFrameCall). */
+  /** REST call made as the frame token (b24Client.makeFrameCall). */
   call: (domain: string, accessToken: string, method: string) => Promise<unknown>
-  /** Код нашего приложения (`B24_APP_CODE`); пусто — отказ 503, а не пропуск проверки. */
+  /** Our app's code (`B24_APP_CODE`); empty — refuse with 503 rather than skip the check. */
   appCode: string
-  /** Можно ли сейчас сходить в портал с живой проверкой; `false` — 429. По умолчанию — можно. */
+  /** Whether a live check against the portal is allowed right now; `false` — 429. Default: allowed. */
   allowLiveCheck?: () => boolean
   now?: () => number
 }
 
-/** Кэш проверок: один и тот же токен не гоняем в портал на каждый запрос. Ключ — хэш токена. */
+/** Verification cache: the same token isn't re-checked against the portal on every request. Keyed by token hash. */
 const cache = new Map<string, { until: number, verdict: FrameVerdict }>()
 export const VERIFY_CACHE_MS = 60_000
 export const VERIFY_CACHE_MAX = 5000
 
 /**
- * Запоминает решение. Кэш полон — сначала снимаются истёкшие, потом самые старые записи до 90 %
- * потолка. Раньше кэш очищался ЦЕЛИКОМ: все сотрудники разом шли на живую проверку и упирались в
- * её лимит по IP — ложные 429 (находка отдела безопасности панели).
+ * Remembers a verdict. When the cache is full, expired entries are dropped first, then the
+ * oldest ones down to 90% of the cap. The cache used to be cleared ENTIRELY: all employees would
+ * hit the live check at once and run into its per-IP limit — spurious 429s (finding from the
+ * panel's security team).
  */
 function remember(key: string, entry: { until: number, verdict: FrameVerdict }, now: number): void {
   if (cache.size >= VERIFY_CACHE_MAX) {
@@ -75,8 +76,8 @@ function remember(key: string, entry: { until: number, verdict: FrameVerdict }, 
       cache.delete(k)
     }
   }
-  // Удалить и вставить заново: `set` по существующему ключу оставил бы его на старом месте, и
-  // свежеперепроверенный токен вытеснялся бы первым (находка /code-review).
+  // Delete and re-insert: `set` on an existing key would leave it in its old position, so a
+  // freshly re-verified token would be the first to be evicted (finding of /code-review).
   cache.delete(key)
   cache.set(key, entry)
 }
@@ -85,17 +86,17 @@ function cacheKey(auth: FrameAuth): string {
   return createHash('sha256').update(`${auth.domain}|${auth.accessToken}`).digest('hex')
 }
 
-/** Для тестов: сбросить кэш между сценариями. */
+/** For tests: reset the cache between scenarios. */
 export function resetFrameCache(): void {
   cache.clear()
 }
 
-/** Для тестов: сколько решений сейчас в кэше. */
+/** For tests: how many verdicts are currently cached. */
 export function frameCacheSize(): number {
   return cache.size
 }
 
-/** Похоже ли исключение на отказ в авторизации (а не на сбой сети/портала). */
+/** Whether an exception looks like an auth rejection (rather than a network/portal failure). */
 export function isAuthRejection(message: string): boolean {
   return /expired_token|invalid_token|NO_AUTH_FOUND|INVALID_CREDENTIALS|user_access_error|frame token rejected|\b401\b/i.test(message)
 }

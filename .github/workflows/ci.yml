@@ -1,22 +1,22 @@
 name: CI
 
-# PR   → ci (линт → тесты → типы → сборка) + docker-build (образ собирается, в реестр не идёт).
-# main → ci → deploy (образ в GHCR; Watchtower на сервере подхватит его за ~5 минут).
-# Схема — как в эталоне client-bank-alfa-by (docs/DEPLOY.md).
+# PR   → ci (lint → tests → typecheck → build) + docker-build (image builds, doesn't push to the registry).
+# main → ci → deploy (image to GHCR; Watchtower on the server picks it up in ~5 minutes).
+# Scheme — same as the client-bank-alfa-by reference app (docs/DEPLOY.md).
 #
-# Имена джоб `ci` и `docker-build` — обязательные проверки в правиле защиты `main`
-# (docs/REPO_SETUP_CHECKLIST.md): переименуете джобу или она перестанет отчитываться на PR — правило
-# будет ждать её вечно, и ни один PR не вольётся. Переименовывать только вместе с правилом.
+# The job names `ci` and `docker-build` are required checks in the `main` branch protection rule
+# (docs/REPO_SETUP_CHECKLIST.md): rename a job or it stops reporting on PRs — the rule
+# will wait for it forever, and no PR will merge. Rename it only together with the rule.
 #
-# Сторонние actions закреплены полным SHA (supply-chain: изменяемый тег можно переписать и
-# выполнить код на раннере с GITHUB_TOKEN). Комментарий `# vX.Y.Z` читает Dependabot и держит
-# SHA свежими. SHA сняты из эталона client-bank-alfa-by, где они уже проходят этот CI.
+# Third-party actions are pinned by full SHA (supply-chain: a mutable tag can be rewritten to
+# run code on the runner with GITHUB_TOKEN). Dependabot reads the `# vX.Y.Z` comment and keeps
+# the SHAs current. The SHAs were taken from the client-bank-alfa-by reference app, where they already pass this CI.
 on:
   push:
     branches: [main]
-    # Правка только этих файлов образ не меняет. Без фильтра каждый мерж документации пересобирал бы
-    # образ (у нового digest другие метки времени), и Watchtower перезапускал бы прод. На PR проверки
-    # идут всегда; выкатить вручную — workflow_dispatch.
+    # Editing only these files doesn't change the image. Without the filter every docs merge would rebuild
+    # the image (the new digest has different timestamps), and Watchtower would restart prod. PR checks
+    # always run; to deploy manually — workflow_dispatch.
     paths-ignore:
       - '**/*.md'
       - 'docs/**'
@@ -29,12 +29,12 @@ on:
       - 'LICENSE'
   pull_request:
     branches: [main]
-  # Ручной передеплой: тот же конвейер на `main` без коммита (образ пересобирается и уходит в GHCR).
+  # Manual redeploy: the same pipeline on `main` without a commit (the image is rebuilt and pushed to GHCR).
   workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
-  # Отменяем только устаревшие прогоны PR; выкат `main` посреди отправки в GHCR не обрываем.
+  # We only cancel stale PR runs; we don't abort a `main` deploy in the middle of pushing to GHCR.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -50,7 +50,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-        # Версия pnpm берётся из поля "packageManager" в package.json.
+        # The pnpm version is taken from the "packageManager" field in package.json.
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -61,7 +61,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Prepare Nuxt
-        # Генерирует .nuxt/eslint.config.mjs и tsconfig, от которых зависят lint и typecheck.
+        # Generates .nuxt/eslint.config.mjs and tsconfig, which lint and typecheck depend on.
         run: pnpm exec nuxi prepare
 
       - name: Lint
@@ -78,8 +78,8 @@ jobs:
 
   docker-build:
     name: docker-build
-    # Образ собирается на каждом PR (в том числе от Dependabot — там всплывёт смена базового
-    # образа node); в реестр не публикуем.
+    # The image is built on every PR (including from Dependabot — that's where a node base
+    # image change would surface); we don't publish to the registry.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -94,22 +94,22 @@ jobs:
         with:
           context: .
           push: false
-          # Кэш только читаем: записанный из refs/pull/N/merge виден лишь этому PR, но съедает общий
-          # бюджет кэша репозитория (10 ГБ) и вытесняет кэш `main`. Пишет его только deploy.
+          # Read-only cache: one written from refs/pull/N/merge is visible only to this PR but eats the shared
+          # repo cache budget (10 GB) and evicts the `main` cache. Only deploy writes it.
           cache-from: type=gha,scope=app
           tags: aiconnect:ci
 
   deploy:
     name: Build & Push to GHCR
-    # Красный CI не пускает образ в GHCR, а значит и на сервер. Выкатывает только `main` —
-    # пушем или ручным запуском (workflow_dispatch).
+    # A red CI blocks the image from reaching GHCR, and so the server. Only `main` deploys —
+    # via a push or a manual run (workflow_dispatch).
     needs: ci
     if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
       contents: read
-      packages: write  # отправка в ghcr.io встроенным GITHUB_TOKEN, отдельный секрет не нужен
+      packages: write  # pushing to ghcr.io with the built-in GITHUB_TOKEN, no separate secret needed
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -128,14 +128,14 @@ jobs:
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ghcr.io/${{ github.repository }}
-          # latest — его тянет Watchtower; sha-<коммит> — для отката на известную версию.
+          # latest — pulled by Watchtower; sha-<commit> — for rolling back to a known version.
           tags: |
             type=raw,value=latest
             type=sha,prefix=sha-
 
-      # Единственный build-arg — коммит сборки: его показывает GET /api/health, чтобы с сервера
-      # было видно, какой образ запущен и докатил ли Watchtower новый. Адрес и секреты образ
-      # читает из окружения при запуске (Dockerfile), поэтому один образ годится для любого сервера.
+      # The only build-arg is the build commit: shown by GET /api/health so the server
+      # reveals which image is running and whether Watchtower rolled out the new one. The image reads
+      # the address and secrets from the environment at startup (Dockerfile), so one image works for any server.
       - name: Build and push
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:

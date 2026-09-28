@@ -1,22 +1,22 @@
-// GET /api/health — жив ли сервер и сконфигурирован ли он. Без секретов: только флаги «задано / нет».
+// GET /api/health — whether the server is alive and configured. No secrets: just "set / not set" flags.
 
 import { buildCommit } from '../utils/buildInfo'
 import { forwardedStatus } from '../utils/requestLimits'
 
 export default defineEventHandler(event => ({
   ok: true,
-  // Коммит запущенного образа, 7 знаков — как в теге `sha-…` для отката (null — локальная сборка).
+  // Commit of the running image, 7 characters — matches the `sha-…` tag used for rollback (null — local build).
   commit: buildCommit(process.env.COMMIT_SHA),
   config: {
     siteUrl: Boolean(useRuntimeConfig().public.siteUrl),
     oauth: Boolean(process.env.B24_CLIENT_ID && process.env.B24_CLIENT_SECRET),
     tokenKey: Boolean(process.env.B24_TOKEN_ENC_KEY),
-    // Без кода приложения сервер отказывает всем запросам из фрейма (503, server/utils/frameAuth.ts).
+    // Without an app code, the server refuses every frame request (503, server/utils/frameAuth.ts).
     appCode: Boolean(process.env.B24_APP_CODE?.trim()),
     trustProxy: process.env.TRUST_PROXY === '1'
   },
-  // Как сервер видит адрес ЭТОГО запроса (requestLimits.ts → forwardedStatus): запросите health
-  // через свой прокси — при TRUST_PROXY=1 здесь должно быть `used`.
+  // How the server sees THIS request's address (requestLimits.ts → forwardedStatus): request
+  // health through your proxy — with TRUST_PROXY=1 this should read `used`.
   request: {
     forwardedFor: forwardedStatus(getRequestHeader(event, 'x-forwarded-for'), getRequestIP(event), process.env.TRUST_PROXY === '1')
   }

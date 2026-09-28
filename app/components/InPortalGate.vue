@@ -1,6 +1,6 @@
 <script setup lang="ts">
-// Пропускает содержимое, только если страница открыта во фрейме Битрикс24. Это забота об
-// интерфейсе, а не защита: права проверяют портал (вызовы из фрейма) и наш сервер (frameAuth.ts).
+// Shows the content only when the page is opened inside a Bitrix24 frame. This is a UI
+// concern, not security: access is enforced by the portal (frame calls) and our server (frameAuth.ts).
 
 const INIT_TIMEOUT_MS = 10_000
 

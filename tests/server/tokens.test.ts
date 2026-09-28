@@ -22,28 +22,28 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-describe('шифрование секретов', () => {
-  it('туда и обратно; каждый раз новый шифртекст', () => {
+describe('secret encryption', () => {
+  it('round-trips; a fresh ciphertext every time', () => {
     const a = encryptSecret('refresh-token')
     expect(a).not.toBe(encryptSecret('refresh-token'))
     expect(decryptSecret(a)).toBe('refresh-token')
   })
 
-  it('чужой ключ не расшифрует — исключение, а не мусор', () => {
+  it('a different key fails to decrypt — throws, not garbage', () => {
     const blob = encryptSecret('secret')
     expect(() => decryptSecret(blob, randomBytes(32))).toThrow()
   })
 
-  it('без ключа в окружении — отказ, а не хранение открытым текстом', () => {
+  it('no key in the environment — refuses, does not store plaintext', () => {
     expect(() => loadEncKey({})).toThrow(/not set/)
     expect(() => loadEncKey({ B24_TOKEN_ENC_KEY: 'short' })).toThrow(/32 bytes/)
   })
 })
 
-describe('хранилище установок', () => {
+describe('install storage', () => {
   const install = { memberId: 'M1', domain: 'Demo.bitrix24.ru', accessToken: 'AT', refreshToken: 'RT', expiresIn: 3600, applicationToken: 'app1' }
 
-  it('сервер авторизации: из установки, по умолчанию — текущий', async () => {
+  it('auth server: from the install, defaults to current', async () => {
     const kv = memoryKv()
     await saveInstall(kv, { ...install, oauthHost: 'oauth.bitrix.info' })
     expect((await getPortal(kv, 'm1'))?.oauthHost).toBe('oauth.bitrix.info')
@@ -51,18 +51,18 @@ describe('хранилище установок', () => {
     expect((await getPortal(kv, 'm2'))?.oauthHost).toBe('oauth.bitrix24.tech')
   })
 
-  it('сохраняет, находит по домену, шифрует ОБА токена', async () => {
+  it('saves, finds by domain, encrypts BOTH tokens', async () => {
     const kv = memoryKv()
     await saveInstall(kv, { ...install, accessToken: 'access-secret', refreshToken: 'refresh-secret' }, 1000)
     const byDomain = await getPortalByDomain(kv, 'demo.bitrix24.ru')
     expect(byDomain).toMatchObject({ memberId: 'm1', domain: 'demo.bitrix24.ru', expiresAt: 1000 + 3600_000 })
-    // В хранилище — ни одного токена открытым текстом (утечка тома не даёт прав администратора).
+    // No token is stored as plaintext (a volume leak does not grant admin rights).
     expect(JSON.stringify([...kv.data.values()])).not.toMatch(/access-secret|refresh-secret/)
     expect(accessTokenOf(byDomain!)).toBe('access-secret')
     expect(refreshTokenOf(byDomain!)).toBe('refresh-secret')
   })
 
-  it('сменили ключ шифрования — токенов нет, а не исключение', async () => {
+  it('encryption key changed — no tokens, not a throw', async () => {
     const kv = memoryKv()
     await saveInstall(kv, install)
     vi.stubEnv('B24_TOKEN_ENC_KEY', randomBytes(32).toString('hex'))
@@ -71,7 +71,7 @@ describe('хранилище установок', () => {
     expect(refreshTokenOf(record)).toBe('')
   })
 
-  it('обновление токенов шифрует новые и не затирает refresh пустым', async () => {
+  it('updating tokens encrypts the new ones and does not blank refresh with an empty value', async () => {
     const kv = memoryKv()
     await saveInstall(kv, install)
     await updateTokens(kv, 'M1', { accessToken: 'AT2', refreshToken: '', expiresAt: 5 })
@@ -81,35 +81,35 @@ describe('хранилище установок', () => {
     expect(record.expiresAt).toBe(5)
   })
 
-  it('индекс домена, указывающий на запись с другим доменом, не срабатывает', async () => {
+  it('a domain index pointing to a record with a different domain does not fire', async () => {
     const kv = memoryKv()
     await saveInstall(kv, install)
-    // Устаревший индекс: домен ведёт к записи, которая уже живёт на другом домене.
+    // Stale index: the domain points to a record that now lives on a different domain.
     await kv.setItem('domain:old.bitrix24.ru', 'm1')
     expect(await getPortalByDomain(kv, 'old.bitrix24.ru')).toBeNull()
   })
 
-  it('application_token пишется один раз — переустановка его не подменит', async () => {
+  it('application_token is written once — a reinstall does not overwrite it', async () => {
     const kv = memoryKv()
     await saveInstall(kv, install)
     await saveInstall(kv, { ...install, applicationToken: 'attacker' })
     expect((await getPortal(kv, 'm1'))?.applicationToken).toBe('app1')
   })
 
-  it('обновление токенов не воскрешает удалённый портал', async () => {
+  it('updating tokens does not resurrect a removed portal', async () => {
     const kv = memoryKv()
     await updateTokens(kv, 'ghost', { accessToken: 'x', refreshToken: 'y', expiresAt: 1 })
     expect(kv.data.size).toBe(0)
   })
 
-  it('удаление стирает и запись, и индекс по домену', async () => {
+  it('removal wipes both the record and the domain index', async () => {
     const kv = memoryKv()
     await saveInstall(kv, install)
     await removePortal(kv, 'M1')
     expect(kv.data.size).toBe(0)
   })
 
-  it('переезд портала на новый домен убирает старый индекс', async () => {
+  it('a portal moving to a new domain removes the old index', async () => {
     const kv = memoryKv()
     await saveInstall(kv, install)
     await saveInstall(kv, { ...install, domain: 'new.bitrix24.ru' })
@@ -117,10 +117,10 @@ describe('хранилище установок', () => {
     expect(await getPortalByDomain(kv, 'new.bitrix24.ru')).not.toBeNull()
   })
 
-  it('чужой индекс домена не трогаем: ни при переезде, ни при удалении', async () => {
+  it('another portal\'s domain index is left untouched: neither on move nor on removal', async () => {
     const kv = memoryKv()
     await saveInstall(kv, install)
-    // Домен demo.* перешёл к другому порталу (M2), а M1 переехал.
+    // The demo.* domain moved to another portal (M2), and M1 moved elsewhere.
     await saveInstall(kv, { ...install, memberId: 'M2', applicationToken: 'app2' })
     await saveInstall(kv, { ...install, domain: 'new.bitrix24.ru' })
     expect((await getPortalByDomain(kv, 'demo.bitrix24.ru'))?.memberId).toBe('m2')
@@ -129,25 +129,25 @@ describe('хранилище установок', () => {
   })
 })
 
-describe('сверка member_id и домена при установке', () => {
+describe('member_id and domain verification on install', () => {
   const grant = { access_token: 'a2', refresh_token: 'r2', expires_in: 3600, member_id: 'm1', client_endpoint: 'https://demo.bitrix24.ru/rest/' }
 
-  it('совпали — отдаёт РОТИРОВАННЫЙ грант и настоящий домен', async () => {
+  it('matched — returns the ROTATED grant and the real domain', async () => {
     const res = await verifyInstallMember('M1', 'Demo.bitrix24.ru', 'rt', async () => grant)
     expect(res).toEqual({ ok: true, grant: { accessToken: 'a2', refreshToken: 'r2', expiresIn: 3600, domain: 'demo.bitrix24.ru' } })
   })
 
-  it('грант другого портала — 403 (попытка отравить установку)', async () => {
+  it('grant for another portal — 403 (attempt to poison the install)', async () => {
     const res = await verifyInstallMember('victim', 'demo.bitrix24.ru', 'rt', async () => ({ ...grant, member_id: 'attacker' }))
     expect(res).toEqual({ ok: false, status: 403 })
   })
 
-  it('свой member_id, но ЧУЖОЙ домен — 403 (подмена индекса «домен → портал»)', async () => {
+  it('own member_id but ANOTHER portal\'s domain — 403 ("domain → portal" index spoofing)', async () => {
     const res = await verifyInstallMember('m1', 'victim.bitrix24.ru', 'rt', async () => grant)
     expect(res).toEqual({ ok: false, status: 403 })
   })
 
-  it('в ответе нет member_id или адреса портала — 503, а не «поверим»', async () => {
+  it('response is missing member_id or portal address — 503, not "take it on faith"', async () => {
     const { member_id: _m, ...noMember } = grant
     const { client_endpoint: _c, ...noEndpoint } = grant
     expect(await verifyInstallMember('m1', 'demo.bitrix24.ru', 'rt', async () => noMember)).toEqual({ ok: false, status: 503 })
@@ -155,7 +155,7 @@ describe('сверка member_id и домена при установке', () 
     expect(await verifyInstallMember('m1', 'demo.bitrix24.ru', 'rt', async () => ({ ...grant, client_endpoint: 'not a url' }))).toEqual({ ok: false, status: 503 })
   })
 
-  it('поддельный грант — 403, сбой сети или нашей конфигурации — 503', async () => {
+  it('forged grant — 403, network or our own config failure — 503', async () => {
     const verify = (refresh: () => Promise<unknown>) => verifyInstallMember('m', 'demo.bitrix24.ru', 'rt', refresh)
     expect((await verify(async () => ({ error: 'invalid_grant' }))).status).toBe(403)
     expect((await verify(async () => ({ error: 'invalid_client' }))).status).toBe(503)
@@ -165,7 +165,7 @@ describe('сверка member_id и домена при установке', () 
     expect((await verify(async () => 'not json')).status).toBe(503)
   })
 
-  it('без refresh-токена, member_id или домена сверять нечего — 403, в OAuth не ходим', async () => {
+  it('no refresh token, member_id or domain to verify against — 403, no OAuth call', async () => {
     const refresh = vi.fn(async () => grant)
     expect((await verifyInstallMember('m1', 'demo.bitrix24.ru', '', refresh)).status).toBe(403)
     expect((await verifyInstallMember(' ', 'demo.bitrix24.ru', 'rt', refresh)).status).toBe(403)
@@ -173,20 +173,20 @@ describe('сверка member_id и домена при установке', () 
     expect(refresh).not.toHaveBeenCalled()
   })
 
-  it('срок жизни: мусор или ноль — час по умолчанию', async () => {
+  it('lifetime: garbage or zero — defaults to one hour', async () => {
     const res = await verifyInstallMember('m1', 'demo.bitrix24.ru', 'rt', async () => ({ ...grant, expires_in: 'x' }))
     expect(res.grant?.expiresIn).toBe(3600)
   })
 
-  it('endpointHost: хост в нижнем регистре или пусто', () => {
+  it('endpointHost: lowercased host, or empty', () => {
     expect(endpointHost('https://Demo.Bitrix24.ru/rest/')).toBe('demo.bitrix24.ru')
     expect(endpointHost('')).toBe('')
     expect(endpointHost(42)).toBe('')
   })
 })
 
-describe('запрос продления токена', () => {
-  it('POST формой на сервер авторизации портала; секреты — в теле, не в адресе', async () => {
+describe('token refresh request', () => {
+  it('POSTs a form to the portal\'s auth server; secrets are in the body, not the URL', async () => {
     const fetchFn = vi.fn(async () => ({ json: async () => ({ ok: 1 }) }))
     const refresh = rawOauthRefresh(fetchFn, { clientId: 'cid', clientSecret: 'csecret' })
     expect(await refresh('rt-1', 'oauth.bitrix.info')).toEqual({ ok: 1 })
@@ -200,7 +200,7 @@ describe('запрос продления токена', () => {
     })
   })
 
-  it('хост с путём, портом или userinfo — отказ до запроса', async () => {
+  it('host with a path, port or userinfo — rejected before the request', async () => {
     const fetchFn = vi.fn()
     const refresh = rawOauthRefresh(fetchFn, { clientId: 'cid', clientSecret: 'csecret' })
     for (const host of ['evil.com/x', 'a@evil.com', 'evil.com:8080', '']) {

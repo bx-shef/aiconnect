@@ -1,6 +1,6 @@
 <script setup lang="ts">
-// Мета-теги лендинга здесь не ставим: корневой компонент общий для всех страниц, включая
-// служебные (/install, /settings), — урок эталона (#425 в client-bank-alfa-by).
+// We don't set landing page meta tags here: the root component is shared across all pages, including
+// utility ones (/install, /settings) — lesson from the reference app (#425 in client-bank-alfa-by).
 useHead({
   htmlAttrs: { lang: 'ru' },
   meta: [{ name: 'viewport', content: 'width=device-width, initial-scale=1' }]

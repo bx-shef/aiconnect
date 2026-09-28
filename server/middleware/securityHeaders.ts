@@ -1,6 +1,6 @@
-// Заголовки безопасности страниц. Главное — `frame-ancestors`: страницы приложения открываются
-// во фрейме портала, и встраивать их разрешено только порталам Битрикс24 (облачным зонам и
-// коробкам из B24_SELFHOSTED_HOSTS). X-Frame-Options не ставим — он запретил бы и портал.
+// Security headers for pages. The main one is `frame-ancestors`: the app's pages open inside the
+// portal's frame, and only Bitrix24 portals (cloud zones and on-premise hosts from
+// B24_SELFHOSTED_HOSTS) are allowed to embed them. We don't set X-Frame-Options — it would block the portal too.
 
 import { frameAncestors } from '../utils/b24Host'
 
