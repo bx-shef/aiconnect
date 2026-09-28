@@ -3,8 +3,8 @@
   "vueCompilerOptions": {
     // Незнакомый тег в шаблоне — ошибка типов, а не тихий пустой элемент. Nuxt называет
     // компоненты из подкаталогов с приставкой каталога (components/invoice/FillPreview.vue →
-    // InvoiceFillPreview); тег <FillPreview> рисовался пустым, и предпросмотр счёта с ошибками
-    // «нет времени» не показывался вовсе (живой прогон 2026-09-25).
+    // InvoiceFillPreview); в шаблоне invoice-from-tasks тег <FillPreview> рисовался пустым, и
+    // предпросмотр счёта не показывался вовсе (живой прогон 2026-09-25).
     "checkUnknownComponents": true
   }
 }

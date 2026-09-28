@@ -13,8 +13,7 @@ export default defineEventHandler(event => ({
     tokenKey: Boolean(process.env.B24_TOKEN_ENC_KEY),
     // Без кода приложения сервер отказывает всем запросам из фрейма (503, server/utils/frameAuth.ts).
     appCode: Boolean(process.env.B24_APP_CODE?.trim()),
-    trustProxy: process.env.TRUST_PROXY === '1',
-    bitrixGpt: Boolean(process.env.BITRIXGPT_API_KEY || process.env.VIBE_API_KEY)
+    trustProxy: process.env.TRUST_PROXY === '1'
   },
   // Как сервер видит адрес ЭТОГО запроса (requestLimits.ts → forwardedStatus): запросите health
   // через свой прокси — при TRUST_PROXY=1 здесь должно быть `used`.

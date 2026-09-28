@@ -6,7 +6,10 @@ import type { WindowLimit } from './rateLimit'
 
 /** Тело события портала — PHP-форма в несколько сотен байт; 64 КБ — с большим запасом. */
 export const EVENTS_BODY_LIMIT = 64 * 1024
-/** Прочие POST: самое крупное — контекст консультации (до 30 тыс. символов) и ставки. */
+/**
+ * Прочие POST. Своих POST-обработчиков, кроме событий, на этапе 0 нет; предел — с запасом под
+ * запросы BitrixGPT к `completions_url` (этап 1 docs/PLAN.md замерит их размер).
+ */
 export const API_BODY_LIMIT = 512 * 1024
 
 /**

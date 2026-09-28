@@ -1,10 +1,10 @@
 // Установка: какие вызовы сделать и чего не хватает. Чистые функции — порядок и состав
 // вызовов проверяются тестом, а сама страница (pages/install.vue) лишь исполняет их.
 
-import { B24_REQUIRED_SCOPES, BOUND_EVENTS, EVENTS_HANDLER_PATH, INVOICE_HANDLER_PATH, INVOICE_PLACEMENT, INVOICE_PLACEMENT_TITLE } from '~/config/b24'
+import { B24_REQUIRED_SCOPES, BOUND_EVENTS, EVENTS_HANDLER_PATH } from '~/config/b24'
 
 /**
- * Адрес обработчика, пригодный для placement.bind / event.bind: только абсолютный https.
+ * Адрес обработчика, пригодный для event.bind: только абсолютный https.
  * Относительный Битрикс24 не примет, а http отвергнет браузер во фрейме портала.
  */
 export function absoluteHandler(siteUrl: string, path: string): string | null {
@@ -23,31 +23,8 @@ export function missingScopes(granted: unknown): string[] {
 }
 
 export interface BindCall {
-  method: 'placement.bind' | 'event.bind'
+  method: 'event.bind'
   params: Record<string, unknown>
-}
-
-/**
- * Регистрация пункта меню в карточке счёта — если его ещё нет. `existing` — ответ `placement.get`.
- * ⚠ Точка допускает несколько регистраций (документация «Каталог точек встраивания»), поэтому
- * повторный bind при переустановке дал бы ВТОРОЙ пункт меню, а не ошибку.
- */
-export function placementBindCall(siteUrl: string, existing: unknown = []): BindCall | null {
-  const handler = absoluteHandler(siteUrl, INVOICE_HANDLER_PATH)
-  if (!handler) return null
-  const already = (Array.isArray(existing) ? existing : [])
-    .map(p => p as { placement?: unknown, handler?: unknown })
-    .some(p => String(p.placement ?? '').toUpperCase() === INVOICE_PLACEMENT && String(p.handler ?? '') === handler)
-  if (already) return null
-  return {
-    method: 'placement.bind',
-    params: {
-      PLACEMENT: INVOICE_PLACEMENT,
-      HANDLER: handler,
-      TITLE: INVOICE_PLACEMENT_TITLE,
-      LANG_ALL: { ru: { TITLE: INVOICE_PLACEMENT_TITLE }, en: { TITLE: 'Fill from tasks' } }
-    }
-  }
 }
 
 /**
@@ -66,21 +43,11 @@ export function eventBindCalls(siteUrl: string, existing: unknown): BindCall[] {
   return BOUND_EVENTS.filter(ev => !bound.has(ev)).map(ev => ({ method: 'event.bind' as const, params: { event: ev, handler } }))
 }
 
-/** Встройки нашего приложения, указывающие на СТАРЫЙ адрес (переезд сервера) — их снимаем. */
-export function stalePlacements(siteUrl: string, existing: unknown): Array<{ PLACEMENT: string, HANDLER: string }> {
-  const handler = absoluteHandler(siteUrl, INVOICE_HANDLER_PATH)
-  if (!handler) return []
-  return (Array.isArray(existing) ? existing : [])
-    .map(p => p as { placement?: unknown, handler?: unknown })
-    .filter(p => String(p.placement ?? '').toUpperCase() === INVOICE_PLACEMENT && String(p.handler ?? '') !== handler)
-    .map(p => ({ PLACEMENT: INVOICE_PLACEMENT, HANDLER: String(p.handler ?? '') }))
-}
-
 /**
  * Подписки нашего приложения на события установки и удаления со СТАРЫМ адресом (переезд
- * сервера) — их снимаем `event.unbind` (`event`, `handler` — документация метода). Раньше
- * переустановка только дописывала новые подписки, и старые оставались мёртвым грузом (находка
- * ревьюера документации). `event.get` отдаёт подписки только нашего приложения.
+ * сервера) — их снимаем `event.unbind` (`event`, `handler` — документация метода): иначе
+ * переустановка только дописывала бы новые подписки, и старые оставались мёртвым грузом.
+ * `event.get` отдаёт подписки только нашего приложения.
  */
 export function staleEventHandlers(siteUrl: string, existing: unknown): Array<{ event: string, handler: string }> {
   const handler = absoluteHandler(siteUrl, EVENTS_HANDLER_PATH)
