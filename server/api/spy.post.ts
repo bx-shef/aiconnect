@@ -1,11 +1,12 @@
 // POST /api/spy — the admin switches the spy's answer mode (`error` / `echo`) or clears captures.
 
-import { clearCaptures, isSpyMode, setSpyMode } from '../utils/spy'
+import { clearCaptures, isSpyMode, setSpyMode, spyAccessError } from '../utils/spy'
 import { portalStore, requireFrameUser } from '../utils/requestContext'
 
 export default defineEventHandler(async (event) => {
   const { user } = await requireFrameUser(event)
-  if (!user.isAdmin) throw createError({ statusCode: 403, statusMessage: 'portal admin only' })
+  const denied = spyAccessError(user.isAdmin, user.portal.domain)
+  if (denied) throw createError({ statusCode: denied.status, statusMessage: denied.message })
   const body = await readBody<{ mode?: unknown, clear?: unknown }>(event).catch(() => null)
   const kv = portalStore()
   if (body?.clear === true) {

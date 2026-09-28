@@ -1,9 +1,10 @@
 // completions_url of the stage 1 protocol spy: GET → 200 (Bitrix24 checks the URL on
 // ai.engine.register), POST → capture, 202 at once, callback afterwards. Decisions are in
-// server/utils/spy.ts (covered by tests); here only the body and live dependencies.
+// server/utils/spy.ts (engineGate, handleEngineRequest — covered by tests); here only the body and
+// live dependencies.
 
 import { loadEncKey } from '../../../utils/secretCrypto'
-import { handleEngineRequest, isEngineCategory, memberIdFromSegment } from '../../../utils/spy'
+import { engineGate, handleEngineRequest } from '../../../utils/spy'
 import { SlidingWindow } from '../../../utils/rateLimit'
 import { portalStore } from '../../../utils/requestContext'
 import { ENGINE_REQUESTS_PER_PORTAL } from '../../../utils/requestLimits'
@@ -17,24 +18,21 @@ export default defineEventHandler(async (event) => {
   const category = getRouterParam(event, 'category') ?? ''
   const encKey = loadEncKey()
   const kv = portalStore()
+  const getPortalDomain = async (id: string) => (await getPortal(kv, id))?.domain ?? null
 
-  if (event.method === 'GET' || event.method === 'HEAD') {
-    const memberId = memberIdFromSegment(segment, encKey)
-    if (!memberId || !isEngineCategory(category) || !(await getPortal(kv, memberId))) throw createError({ statusCode: 404, statusMessage: 'unknown endpoint' })
-    return { ready: true }
-  }
-  if (event.method !== 'POST') throw createError({ statusCode: 405, statusMessage: 'method not allowed' })
+  // Everything is checked before the body is read: up to 16 MB is buffered only for real portals where the spy is on.
+  const gate = await engineGate(segment, category, event.method, {
+    encKey,
+    getPortalDomain,
+    allow: memberId => windows.take([[`engine:${memberId}`, ENGINE_REQUESTS_PER_PORTAL]])
+  })
+  if (!gate.ok) throw createError({ statusCode: gate.status, statusMessage: gate.message })
+  if (gate.answer === 'ready') return { ready: true }
 
-  // Signature and install are checked before the body is read: up to 16 MB is buffered only for real portals.
-  const memberId = memberIdFromSegment(segment, encKey)
-  if (!memberId || !isEngineCategory(category) || !(await getPortal(kv, memberId))) throw createError({ statusCode: 404, statusMessage: 'unknown endpoint' })
-  if (!windows.take([[`engine:${memberId}`, ENGINE_REQUESTS_PER_PORTAL]])) {
-    throw createError({ statusCode: 429, statusMessage: 'too many requests' })
-  }
   const verdict = await handleEngineRequest(segment, category, (await readRawBody(event)) || '', getRequestHeader(event, 'content-type') ?? '', {
     kv,
     encKey,
-    getPortalDomain: async id => (await getPortal(kv, id))?.domain ?? null,
+    getPortalDomain,
     postJson: async (url, body) => {
       const res = await fetch(url, {
         method: 'POST',

@@ -4,7 +4,7 @@
 // (server/api/engine/[portal]/[category].ts) only reads the body and passes live dependencies.
 // Protocol as documented — docs/RESEARCH.md; what the spy learns goes to docs/PROTOCOL.md.
 
-import { createHmac, timingSafeEqual } from 'node:crypto'
+import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
 import { isAllowedPortalHost, parseSelfHostedHosts } from './b24Host'
 import type { KeyValue } from './tokenStore'
 
@@ -75,6 +75,62 @@ export function sanitizeForCapture(value: unknown, depth = 0, key = ''): unknown
   return out
 }
 
+/**
+ * Size budget of one stored capture (serialized). Per-string and per-level limits alone still let
+ * a wide body of short strings through almost whole, and every capture rewrites the portal's list
+ * on disk (finding of the security reviewer). Over budget, the capture keeps a cut JSON preview.
+ */
+export const CAPTURE_BUDGET_CHARS = 16_000
+
+export function fitCaptureBudget(sanitized: unknown): unknown {
+  const json = JSON.stringify(sanitized) ?? ''
+  if (json.length <= CAPTURE_BUDGET_CHARS) return sanitized
+  return { '[over budget]': `${json.length} chars`, 'preview': json.slice(0, CAPTURE_BUDGET_CHARS) }
+}
+
+/**
+ * Portals where the spy works: `B24_SPY_PORTALS` — domains, comma or space separated. Empty means
+ * nowhere. The spy is a stage 1 diagnostic, not a product feature: on any other portal the page
+ * says it is off and the endpoint answers 404, so a client's admin never gets "TEST …" providers
+ * and their users' prompts are never stored (finding of the technical director).
+ */
+export function spyEnabledFor(domain: string, env: Record<string, string | undefined> = process.env): boolean {
+  return parseSelfHostedHosts(env.B24_SPY_PORTALS).has(domain.toLowerCase())
+}
+
+/** Who may use /api/spy: the portal admin, on a portal where the spy is on. `null` — allowed. */
+export function spyAccessError(isAdmin: boolean, domain: string, env: Record<string, string | undefined> = process.env): { status: 403, reason: 'not-admin' | 'off', message: string } | null {
+  if (!isAdmin) return { status: 403, reason: 'not-admin', message: 'portal admin only' }
+  if (!spyEnabledFor(domain, env)) return { status: 403, reason: 'off', message: 'spy is off for this portal' }
+  return null
+}
+
+export interface GateDeps {
+  encKey: Buffer
+  getPortalDomain: (memberId: string) => Promise<string | null>
+  /** Rate limit per portal (a SlidingWindow in the handler); `false` — over the limit. */
+  allow: (memberId: string) => boolean
+  env?: Record<string, string | undefined>
+}
+
+export type GateVerdict = { ok: true, answer: 'ready' | 'read-body', memberId: string } | { ok: false, status: 404 | 405 | 429, message: string }
+
+/**
+ * What the completions_url handler does before reading any body: signature, category, install and
+ * spy allow-list → 404; GET/HEAD (the registration check) → ready; other methods → 405; over the
+ * per-portal rate → 429. Only then may up to 16 MB be read.
+ */
+export async function engineGate(segment: string, category: string, method: string, deps: GateDeps): Promise<GateVerdict> {
+  const memberId = memberIdFromSegment(segment, deps.encKey)
+  const domain = memberId && isEngineCategory(category) ? await deps.getPortalDomain(memberId) : null
+  if (!memberId || !domain || !spyEnabledFor(domain, deps.env)) return { ok: false, status: 404, message: 'unknown endpoint' }
+  const m = method.toUpperCase()
+  if (m === 'GET' || m === 'HEAD') return { ok: true, answer: 'ready', memberId }
+  if (m !== 'POST') return { ok: false, status: 405, message: 'method not allowed' }
+  if (!deps.allow(memberId)) return { ok: false, status: 429, message: 'too many requests' }
+  return { ok: true, answer: 'read-body', memberId }
+}
+
 /** `auth` shape without secrets: every leaf becomes `<type:length>`, keys stay visible. */
 function maskAuth(value: unknown, depth = 0): unknown {
   if (value === null || value === undefined) return value
@@ -127,6 +183,8 @@ export function echoCallbackBody(category: EngineCategory): { result: string } |
 
 /** One captured request as stored and shown to the portal admin. */
 export interface Capture {
+  /** Random id: two requests of one category can share the same millisecond (finding of the panel). */
+  id: string
   at: string
   category: string
   /** Top-level keys as received — the protocol shape at a glance. */
@@ -140,6 +198,25 @@ export interface Capture {
 const capturesKey = (memberId: string) => `spy:${memberId.toLowerCase()}`
 const modeKey = (memberId: string) => `spymode:${memberId.toLowerCase()}`
 
+/**
+ * Per-portal serialization of read-modify-write on the capture list: without it a callback's
+ * update, finishing after 202, could overwrite a capture added in between (finding of
+ * /code-review). One process holds the store (docs/ARCHITECTURE.md), so an in-memory chain is enough.
+ */
+const locks = new Map<string, Promise<void>>()
+async function withLock(memberId: string, fn: () => Promise<void>): Promise<void> {
+  const key = memberId.toLowerCase()
+  const prev = locks.get(key) ?? Promise.resolve()
+  const next = prev.then(fn, fn)
+  const settled = next.catch(() => undefined)
+  locks.set(key, settled)
+  try {
+    await next
+  } finally {
+    if (locks.get(key) === settled) locks.delete(key)
+  }
+}
+
 export async function listCaptures(kv: KeyValue, memberId: string): Promise<Capture[]> {
   const value = await kv.getItem(capturesKey(memberId))
   return Array.isArray(value) ? value as Capture[] : []
@@ -147,22 +224,26 @@ export async function listCaptures(kv: KeyValue, memberId: string): Promise<Capt
 
 /** Adds a capture on top and keeps the newest {@link CAPTURES_PER_PORTAL}. */
 export async function addCapture(kv: KeyValue, memberId: string, capture: Capture): Promise<void> {
-  const prev = await listCaptures(kv, memberId)
-  await kv.setItem(capturesKey(memberId), [capture, ...prev].slice(0, CAPTURES_PER_PORTAL))
+  await withLock(memberId, async () => {
+    const prev = await listCaptures(kv, memberId)
+    await kv.setItem(capturesKey(memberId), [capture, ...prev].slice(0, CAPTURES_PER_PORTAL))
+  })
 }
 
-/** Replaces a stored capture (matched by time and category) — used to record the callback outcome. */
+/** Replaces a stored capture (matched by id) — used to record the callback outcome. */
 export async function updateCapture(kv: KeyValue, memberId: string, capture: Capture): Promise<void> {
-  const list = await listCaptures(kv, memberId)
-  const i = list.findIndex(c => c.at === capture.at && c.category === capture.category)
-  if (i < 0) return
-  list[i] = capture
-  await kv.setItem(capturesKey(memberId), list)
+  await withLock(memberId, async () => {
+    const list = await listCaptures(kv, memberId)
+    const i = list.findIndex(c => c.id === capture.id)
+    if (i < 0) return
+    list[i] = capture
+    await kv.setItem(capturesKey(memberId), list)
+  })
 }
 
 /** Drops the captures only (the admin's "clear" button). */
 export async function clearCaptures(kv: KeyValue, memberId: string): Promise<void> {
-  await kv.removeItem(capturesKey(memberId))
+  await withLock(memberId, () => kv.removeItem(capturesKey(memberId)))
 }
 
 /** Drops everything the spy keeps for a portal (app uninstall). */
@@ -204,6 +285,7 @@ export async function handleEngineRequest(segment: string, category: string, raw
   if (!memberId || !isEngineCategory(category)) return { status: 404, body: { error: 'unknown endpoint' } }
   const domain = await deps.getPortalDomain(memberId)
   if (!domain) return { status: 404, body: { error: 'portal not installed' } }
+  if (!spyEnabledFor(domain, deps.env)) return { status: 404, body: { error: 'spy is off for this portal' } }
   let parsed: unknown
   try {
     parsed = JSON.parse(raw)
@@ -212,12 +294,13 @@ export async function handleEngineRequest(segment: string, category: string, raw
   }
   const body = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null
   const capture: Capture = {
+    id: randomUUID(),
     at: (deps.now?.() ?? new Date()).toISOString(),
     category,
     keys: body ? Object.keys(body) : [],
     bodyBytes: Buffer.byteLength(raw),
     contentType,
-    body: body ? sanitizeForCapture(body) : sanitizeForCapture(raw),
+    body: fitCaptureBudget(body ? sanitizeForCapture(body) : sanitizeForCapture(raw)),
     callback: { target: 'none' }
   }
   await addCapture(deps.kv, memberId, capture)

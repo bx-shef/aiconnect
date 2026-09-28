@@ -30,6 +30,7 @@
 |---|---|
 | [`PAGE_GUIDE.md`](PAGE_GUIDE.md) | как делать страницы на b24ui во фрейме портала |
 | [`DEPLOY.md`](DEPLOY.md) | выкат (GHCR + Watchtower + nginx-proxy), сервер, окружение, регистрация в Маркете, проверка установки |
+| [`SPY_CHECK.md`](SPY_CHECK.md) | промпт для AI-агента с браузером: проверка шпиона протокола на тестовом портале |
 | [`SMOKE.md`](SMOKE.md) | живой прогон на тестовом портале (`pnpm smoke`): окружение, страж, как читать красное |
 | [`REPO_SETUP_CHECKLIST.md`](REPO_SETUP_CHECKLIST.md) | защита `main`, ветки, dependabot, пакет GHCR — разово владельцу |
 

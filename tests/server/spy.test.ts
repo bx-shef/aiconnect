@@ -1,8 +1,8 @@
 import { randomBytes } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import {
-  addCapture, CAPTURE_STRING_LIMIT, CAPTURES_PER_PORTAL, checkCallbackUrl, clearCaptures, echoCallbackBody, errorCallbackBody,
-  getSpyMode, handleEngineRequest, listCaptures, memberIdFromSegment, portalSegment, sanitizeForCapture, setSpyMode, type Capture, type HandleDeps
+  addCapture, engineGate, spyAccessError, CAPTURE_BUDGET_CHARS, CAPTURE_STRING_LIMIT, fitCaptureBudget, CAPTURES_PER_PORTAL, checkCallbackUrl, clearCaptures, echoCallbackBody, errorCallbackBody,
+  getSpyMode, handleEngineRequest, listCaptures, updateCapture, memberIdFromSegment, portalSegment, sanitizeForCapture, setSpyMode, type Capture, type HandleDeps
 } from '../../server/utils/spy'
 import { removePortal, type KeyValue } from '../../server/utils/tokenStore'
 
@@ -91,6 +91,21 @@ describe('checkCallbackUrl (SSRF guard for the callback)', () => {
   })
 })
 
+describe('capture size budget', () => {
+  it('a wide body of short strings is cut to a preview within the budget', () => {
+    const wide = Object.fromEntries(Array.from({ length: 100 }, (_, i) => [`k${i}`, Object.fromEntries(Array.from({ length: 100 }, (_, j) => [`s${j}`, 'x'.repeat(400)]))]))
+    const out = fitCaptureBudget(sanitizeForCapture(wide)) as Record<string, string>
+    expect(out.preview!.length).toBe(CAPTURE_BUDGET_CHARS)
+    // Stored serialized: quotes inside the preview are escaped, so at most about twice the budget.
+    expect(JSON.stringify(out).length).toBeLessThan(2 * CAPTURE_BUDGET_CHARS + 200)
+    expect(out['[over budget]']).toMatch(/chars$/)
+  })
+
+  it('a small body is kept as is', () => {
+    expect(fitCaptureBudget({ prompt: 'hi' })).toEqual({ prompt: 'hi' })
+  })
+})
+
 describe('callback bodies (docs: AI в Битрикс24 — обзор методов)', () => {
   it('error: api_request_completed false — the portal gets its quota back', () => {
     expect(errorCallbackBody()).toMatchObject({ code: 503, api_request_completed: false })
@@ -106,7 +121,7 @@ describe('capture storage', () => {
   it('newest first, capped per portal; clear drops captures but keeps the mode', async () => {
     const kv = memoryKv()
     for (let i = 0; i < CAPTURES_PER_PORTAL + 5; i++) {
-      await addCapture(kv, MEMBER, { at: `t${i}`, category: 'text', keys: [], bodyBytes: 0, contentType: '', body: null, callback: { target: 'none' } })
+      await addCapture(kv, MEMBER, { id: `id${i}`, at: `t${i}`, category: 'text', keys: [], bodyBytes: 0, contentType: '', body: null, callback: { target: 'none' } })
     }
     const list = await listCaptures(kv, MEMBER)
     expect(list).toHaveLength(CAPTURES_PER_PORTAL)
@@ -115,6 +130,20 @@ describe('capture storage', () => {
     await clearCaptures(kv, MEMBER)
     expect(await listCaptures(kv, MEMBER)).toEqual([])
     expect(await getSpyMode(kv, MEMBER)).toBe('echo')
+  })
+
+  it('concurrent adds and updates of one portal lose nothing (callback after 202 vs a new request)', async () => {
+    const kv = memoryKv()
+    const cap = (i: number): Capture => ({ id: `id${i}`, at: `t${i}`, category: 'text', keys: [], bodyBytes: 0, contentType: '', body: null, callback: { target: 'none' } })
+    await addCapture(kv, MEMBER, cap(0))
+    await Promise.all([
+      ...Array.from({ length: 10 }, (_, i) => addCapture(kv, MEMBER, cap(i + 1))),
+      updateCapture(kv, MEMBER, { ...cap(0), callback: { target: 'errorCallbackUrl', status: 200 } })
+    ])
+    const list = await listCaptures(kv, MEMBER)
+    expect(list).toHaveLength(11)
+    expect(list.find(c => c.id === 'id0')?.callback.status).toBe(200)
+    expect(list.filter(c => c.callback.status === 200)).toHaveLength(1)
   })
 
   it('mode defaults to error; junk in storage reads as error', async () => {
@@ -126,7 +155,7 @@ describe('capture storage', () => {
 
   it('uninstall (removePortal) wipes the spy data of that portal', async () => {
     const kv = memoryKv()
-    await addCapture(kv, MEMBER, { at: 't', category: 'text', keys: [], bodyBytes: 0, contentType: '', body: null, callback: { target: 'none' } })
+    await addCapture(kv, MEMBER, { id: 'x', at: 't', category: 'text', keys: [], bodyBytes: 0, contentType: '', body: null, callback: { target: 'none' } })
     await setSpyMode(kv, MEMBER, 'echo')
     await removePortal(kv, MEMBER)
     expect([...kv.data.keys()].filter(k => k.includes(MEMBER))).toEqual([])
@@ -146,7 +175,7 @@ describe('handleEngineRequest', () => {
   const deps = (over: Partial<HandleDeps> = {}) => {
     const kv = memoryKv()
     const postJson = vi.fn(async () => ({ status: 200 }))
-    return { kv, postJson, deps: { kv, encKey: KEY, getPortalDomain: async (id: string) => id === MEMBER ? DOMAIN : null, postJson, env: {}, now: () => new Date('2026-09-28T12:00:00Z'), ...over } as HandleDeps }
+    return { kv, postJson, deps: { kv, encKey: KEY, getPortalDomain: async (id: string) => id === MEMBER ? DOMAIN : null, postJson, env: { B24_SPY_PORTALS: `other.bitrix24.by, ${DOMAIN}` }, now: () => new Date('2026-09-28T12:00:00Z'), ...over } as HandleDeps }
   }
   const seg = () => portalSegment(MEMBER, KEY)
 
@@ -199,10 +228,67 @@ describe('handleEngineRequest', () => {
     expect(kv.data.size).toBe(0)
   })
 
+  it('portal not in B24_SPY_PORTALS — 404 and nothing stored (spy is a test-portal tool)', async () => {
+    const { kv, deps: d } = deps({ env: { B24_SPY_PORTALS: 'other.bitrix24.by' } })
+    expect(await handleEngineRequest(seg(), 'text', body(), 'application/json', d)).toMatchObject({ status: 404, body: { error: 'spy is off for this portal' } })
+    const { deps: d2 } = deps({ env: {} })
+    expect((await handleEngineRequest(seg(), 'text', body(), 'application/json', d2)).status).toBe(404)
+    expect(kv.data.size).toBe(0)
+  })
+
   it('a non-JSON body is still captured (to learn the format) and answered 400', async () => {
     const { kv, deps: d } = deps()
     const v = await handleEngineRequest(seg(), 'audio', 'prompt=x&file=y', 'application/x-www-form-urlencoded', d)
     expect(v.status).toBe(400)
     expect((await listCaptures(kv, MEMBER))[0]).toMatchObject({ category: 'audio', body: 'prompt=x&file=y', contentType: 'application/x-www-form-urlencoded' })
+  })
+})
+
+describe('spyAccessError (/api/spy)', () => {
+  const env = { B24_SPY_PORTALS: DOMAIN }
+  it('admin on an allowed portal — allowed', () => {
+    expect(spyAccessError(true, DOMAIN, env)).toBeNull()
+  })
+  it('not an admin — 403 even on an allowed portal (captures hold users\' prompts)', () => {
+    expect(spyAccessError(false, DOMAIN, env)).toMatchObject({ status: 403, reason: 'not-admin' })
+  })
+  it('admin on a portal outside B24_SPY_PORTALS — off', () => {
+    expect(spyAccessError(true, 'client.bitrix24.ru', env)).toMatchObject({ status: 403, reason: 'off' })
+    expect(spyAccessError(true, DOMAIN, {})).toMatchObject({ reason: 'off' })
+  })
+})
+
+describe('engineGate (before the body is read)', () => {
+  const gateDeps = (allow = true) => ({ encKey: KEY, getPortalDomain: async (id: string) => id === MEMBER ? DOMAIN : null, allow: vi.fn(() => allow), env: { B24_SPY_PORTALS: DOMAIN } })
+  const seg = () => portalSegment(MEMBER, KEY)
+
+  it('registration GET/HEAD — ready, without spending the rate limit', async () => {
+    const d = gateDeps()
+    expect(await engineGate(seg(), 'text', 'GET', d)).toEqual({ ok: true, answer: 'ready', memberId: MEMBER })
+    expect(await engineGate(seg(), 'call', 'head', d)).toMatchObject({ ok: true, answer: 'ready' })
+    expect(d.allow).not.toHaveBeenCalled()
+  })
+
+  it('POST within the limit — read the body', async () => {
+    expect(await engineGate(seg(), 'text', 'POST', gateDeps())).toEqual({ ok: true, answer: 'read-body', memberId: MEMBER })
+  })
+
+  it('POST over the per-portal limit — 429', async () => {
+    expect(await engineGate(seg(), 'text', 'POST', gateDeps(false))).toMatchObject({ ok: false, status: 429 })
+  })
+
+  it('other methods — 405', async () => {
+    expect(await engineGate(seg(), 'text', 'PUT', gateDeps())).toMatchObject({ ok: false, status: 405 })
+  })
+
+  it('forged signature, unknown category, not installed, spy off — 404 for every method', async () => {
+    const d = gateDeps()
+    for (const method of ['GET', 'POST']) {
+      expect(await engineGate(`${MEMBER}.${'A'.repeat(22)}`, 'text', method, d)).toMatchObject({ status: 404 })
+      expect(await engineGate(seg(), 'video', method, d)).toMatchObject({ status: 404 })
+      expect(await engineGate(seg(), 'text', method, { ...d, getPortalDomain: async () => null })).toMatchObject({ status: 404 })
+      expect(await engineGate(seg(), 'text', method, { ...d, env: {} })).toMatchObject({ status: 404 })
+    }
+    expect(d.allow).not.toHaveBeenCalled()
   })
 })

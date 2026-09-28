@@ -46,7 +46,7 @@ b24jssdk. Из установленного приложения `shef.aiconnect
 
 | Метод | Транспорт | Файл | Назначение, грабли | Статус |
 |---|---|---|---|---|
-| `ai.engine.register` | фрейм | `pages/spy.vue`, параметры — `app/utils/spy.ts` (`registerParams`) | `name`, `code`, `category`, `completions_url`, `settings` (`model_context_type: token`, `model_context_limit: 16000`). При регистрации портал шлёт GET на `completions_url` и ждёт 200 — отвечает `server/api/engine/[portal]/[category].ts`. Повторный `register` с тем же `code` → `ENGINE_REGISTER_ERROR_CODE_UNIQUE` (замер вебхуком 2026-09-28), поэтому при смене адреса — сначала `unregister` (`registerPlan`). | ✅ вебхуком; из приложения — 📄 |
+| `ai.engine.register` | фрейм | `pages/spy.vue`, параметры — `app/utils/spy.ts` (`registerParams`) | `name`, `code`, `category`, `completions_url`, `settings` (`model_context_type: token`, `model_context_limit: 16000` — наше круглое значение для шпиона; по умолчанию у портала 15666). При регистрации портал шлёт GET на `completions_url` и ждёт 200 — отвечает `server/api/engine/[portal]/[category].ts`. Повторный `register` с тем же `code` → `ENGINE_REGISTER_ERROR_CODE_UNIQUE` (замер вебхуком 2026-09-28), поэтому при смене адреса — сначала `unregister` (`registerPlan`). | ✅ вебхуком; из приложения — 📄 |
 | `ai.engine.unregister` | фрейм | `pages/spy.vue` (`unregisterPlan`) | `code`. Ответ `true` — снят, `false` — не найден или чужой (замер). | ✅ вебхуком; из приложения — 📄 |
 | `ai.engine.list` | фрейм | `pages/spy.vue` (`parseEngineList`) | Что уже зарегистрировано: состояние «зарегистрирован / старый адрес». В контексте приложения — только провайдеры этого приложения (документация). Поля — `docs/RESEARCH.md`. | ✅ вебхуком; из приложения — 📄 |
 

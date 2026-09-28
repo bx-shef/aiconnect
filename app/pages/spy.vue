@@ -16,6 +16,7 @@ interface Capture {
   callback: { target: string, host?: string, samePortal?: boolean, status?: number, error?: string }
 }
 interface SpyState {
+  enabled: boolean
   engines: SpyEngine[]
   mode: 'error' | 'echo'
   captures: Capture[]
@@ -31,11 +32,12 @@ const error = ref('')
 
 const stateLabel = { absent: 'не зарегистрирован', ok: 'зарегистрирован', stale: 'старый адрес' } as const
 
-async function load(): Promise<void> {
-  error.value = ''
+/** `keepError` — after an action: its error must stay visible, the reload must not wipe it. */
+async function load(keepError = false): Promise<void> {
+  if (!keepError) error.value = ''
   try {
     state.value = await api.get<SpyState>('/api/spy')
-    registered.value = parseEngineList(await b24.call('ai.engine.list'))
+    if (state.value.enabled) registered.value = parseEngineList(await b24.call('ai.engine.list'))
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
   }
@@ -50,7 +52,7 @@ async function run(action: () => Promise<void>): Promise<void> {
     error.value = e instanceof Error ? e.message : String(e)
   } finally {
     busy.value = false
-    await load()
+    await load(true)
   }
 }
 
@@ -106,7 +108,15 @@ onMounted(async () => {
         data-testid="spy-error"
       />
 
-      <template v-if="state">
+      <B24Alert
+        v-if="state && !state.enabled"
+        color="air-primary-warning"
+        title="Шпион выключен для этого портала"
+        description="Шпион — инструмент разработки: он работает только на тестовых порталах из переменной B24_SPY_PORTALS на сервере приложения (docs/DEPLOY.md)."
+        data-testid="spy-disabled"
+      />
+
+      <template v-if="state && state.enabled">
         <B24Card>
           <template #header>
             <h2 class="font-semibold">
