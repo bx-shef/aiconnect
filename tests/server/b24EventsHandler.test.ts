@@ -89,7 +89,7 @@ describe('events we do not handle', () => {
     expect(allowVerification).toHaveBeenCalledTimes(1)
   })
 
-  it('verification cap exhausted — 429 and logged as a warning, no OAuth call', async () => {
+  it('verification cap exhausted — 429 and written to the error log, no OAuth call', async () => {
     const d = deps({ allowVerification: () => false })
     expect((await handleB24Event(body('ONAPPINSTALL', installAuth), d)).status).toBe(429)
     expect(d.refresh).not.toHaveBeenCalled()
@@ -140,7 +140,7 @@ describe('install (ONAPPINSTALL)', () => {
     }
   })
 
-  it('without B24_CLIENT_ID/SECRET the install is NOT saved — 503 (fail-closed), logged as a warning', async () => {
+  it('without B24_CLIENT_ID/SECRET the install is NOT saved — 503 (fail-closed), written to the error log', async () => {
     const d = deps({ creds: { clientId: '', clientSecret: '' } })
     expect((await handleB24Event(body('ONAPPINSTALL', installAuth), d)).status).toBe(503)
     expect(d.refresh).not.toHaveBeenCalled()
@@ -155,7 +155,7 @@ describe('install (ONAPPINSTALL)', () => {
     expect((await getPortal(d.kv, 'm1'))?.oauthHost).toBe('oauth.bitrix.info')
   })
 
-  it('auth server not allow-listed — 403, no OAuth call, warning logged', async () => {
+  it('auth server not allow-listed — 403, no OAuth call, written to the error log', async () => {
     const d = deps()
     const res = await handleB24Event(body('ONAPPINSTALL', { ...installAuth, server_endpoint: 'https://evil.com/rest/' }), d)
     expect(res.status).toBe(403)

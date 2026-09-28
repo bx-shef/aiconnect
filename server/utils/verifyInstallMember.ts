@@ -21,8 +21,8 @@
 //
 // The authorization server is whichever one the portal named in `auth[server_endpoint]`, but only
 // from the allow-list (`b24Host.ts → resolveOAuthHost`): there's no SSRF here. Secrets go in the
-// body, not the URL (the docs show a GET with a query string, but a body is accepted — verified
-// against the b24jssdk source, oauth/auth.mjs; the SDK itself sends it the same way).
+// body, not the URL (the docs show a GET with a query string, but a body is accepted — confirmed
+// by the b24jssdk authors, oauth/auth.mjs; the SDK itself sends it the same way).
 
 export const INSTALL_VERIFY_TIMEOUT_MS = 15_000
 

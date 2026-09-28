@@ -5,8 +5,8 @@ name: CI
 # Scheme — same as the client-bank-alfa-by reference app (docs/DEPLOY.md).
 #
 # The job names `ci` and `docker-build` are required checks in the `main` branch protection rule
-# (docs/REPO_SETUP_CHECKLIST.md): rename a job or it stops reporting on PRs — the rule
-# will wait for it forever, and no PR will merge. Rename it only together with the rule.
+# (docs/REPO_SETUP_CHECKLIST.md): if a job is renamed or stops reporting on PRs, the rule
+# will wait for it forever, and no PR will merge. Rename a job only together with the rule.
 #
 # Third-party actions are pinned by full SHA (supply-chain: a mutable tag can be rewritten to
 # run code on the runner with GITHUB_TOKEN). Dependabot reads the `# vX.Y.Z` comment and keeps
