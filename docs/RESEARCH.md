@@ -1,108 +1,110 @@
-# Research: plugging an own model into BitrixGPT
+# Исследование: своя модель в BitrixGPT
 
 > Last reviewed: 2026-09-28
 
-What we know before writing code, and what is still unverified. Stage 1 of `docs/PLAN.md`
-(the protocol spy) turns every "unverified" line here into a measured fact in `docs/PROTOCOL.md`.
-Sources: MCP `b24-dev-mcp` (`ai.engine.register`, `ai.engine.list`, article "AI в Битрикс24:
-обзор методов"), https://apidocs.bitrix24.ru/api-reference/ai/ai-engine-register.html,
-legacy https://dev.1c-bitrix.ru/rest_help/ai/ai_engine_register.php, Market app pages.
+Что известно до кода и что ещё не проверено. Этап 1 `docs/PLAN.md` (шпион протокола) превращает
+каждую строку «не проверено» в замеренный факт в `docs/PROTOCOL.md`.
+Источники: MCP `b24-dev-mcp` (`ai.engine.register`, `ai.engine.list`, статья «AI в Битрикс24:
+обзор методов»), https://apidocs.bitrix24.ru/api-reference/ai/ai-engine-register.html,
+старая документация https://dev.1c-bitrix.ru/rest_help/ai/ai_engine_register.php, страницы
+приложений Маркета.
 
-## Mechanism
+## Механизм
 
-Not a placement. The app registers an **AI provider** with `ai.engine.register` (scope
-`ai_admin`, admin only, **cloud only** — not available in on-premise). Bitrix24 lists registered
-providers of the matching category in its model selectors ("Выберите модель AI для …" in
-BitrixGPT settings: CRM, video calls, chat, tasks, sites). The "Выбрать в Маркетплейсе" item
-leads to Market apps with `ai_admin`.
+Не встройка. Приложение регистрирует **AI-провайдера** методом `ai.engine.register` (право
+`ai_admin`, только администратор, **только облако** — в коробке недоступно). Битрикс24 показывает
+зарегистрированных провайдеров нужной категории в своих списках выбора модели («Выберите модель
+AI для …» в настройках BitrixGPT: CRM, видеозвонки, чат, задачи, сайты). Пункт «Выбрать в
+Маркетплейсе» ведёт к приложениям Маркета с `ai_admin`.
 
 ### `ai.engine.register`
 
-| Param | Notes |
+| Параметр | Что |
 |---|---|
-| `name` | shown in the selector |
-| `code` | `A-Za-z0-9-_`; ours: `sh_aiconnect_<category>` |
-| `category` | `text`, `image`, `audio`, `call` (call recordings), `vision`, `classify` |
-| `completions_url` | Bitrix24 sends a GET on registration and expects **200**, otherwise `ENGINE_REGISTER_ERROR_COMPLETIONS_URL_FAIL` |
-| `settings.code_alias` | optional alias |
-| `settings.model_context_type` | `token` or `symbol` |
-| `settings.model_context_limit` | default 15666 |
+| `name` | показывается в списке выбора |
+| `code` | `A-Za-z0-9-_`; у нас — `sh_aiconnect_<category>` |
+| `category` | `text`, `image`, `audio`, `call` (записи звонков), `vision`, `classify` |
+| `completions_url` | при регистрации Битрикс24 шлёт GET и ждёт **200**, иначе `ENGINE_REGISTER_ERROR_COMPLETIONS_URL_FAIL` |
+| `settings.code_alias` | необязательный псевдоним |
+| `settings.model_context_type` | `token` или `symbol` |
+| `settings.model_context_limit` | по умолчанию 15666 |
 
-Related: `ai.engine.list` (in OAuth context returns only this app's providers, linked via
-`APP_CODE`), `ai.engine.unregister`.
+Рядом: `ai.engine.list` (в контексте OAuth возвращает только провайдеров этого приложения,
+связь через `APP_CODE`), `ai.engine.unregister`.
 
-### Request protocol (asynchronous)
+### Протокол запроса (асинхронный)
 
-1. Bitrix24 POSTs the request to `completions_url`. We must answer within **5 s** with **202**
-   and `{"result":"OK"}`; any other status is an error.
-2. When done, POST `{"result": "..."}` to `callbackUrl`.
-3. On failure, POST `{"message", "code", "api_request_completed"}` to `errorCallbackUrl`.
-   `api_request_completed=false` tells Bitrix24 the request was not served (it restores the
-   portal's quota).
-4. `ttl`: default 14400 s, max 86400 s; after it Bitrix24 no longer accepts callbacks.
+1. Битрикс24 шлёт POST с запросом на `completions_url`. Ответить нужно за **5 с** статусом
+   **202** и `{"result":"OK"}`; любой другой статус — ошибка.
+2. Когда готово — POST `{"result": "..."}` на `callbackUrl`.
+3. При сбое — POST `{"message", "code", "api_request_completed"}` на `errorCallbackUrl`.
+   `api_request_completed=false` говорит Битрикс24, что запрос не обслужен (он вернёт порталу
+   квоту).
+4. `ttl`: по умолчанию 14400 с, максимум 86400 с; после него Битрикс24 callback не принимает.
 
-Request fields: `prompt`, `payload_role` (→ system message), `context` (use only when
+Поля запроса: `prompt`, `payload_role` (→ system-сообщение), `context` (брать только при
 `collect_context=true`), `max_tokens`, `temperature`, `payload_raw`, `payload_provider`,
-`payload_prompt_text`, `payload_markers`, `auth` (app auth data; `null` when the provider was
-registered outside an app), `callbackUrl`, `errorCallbackUrl`, `ttl`.
+`payload_prompt_text`, `payload_markers`, `auth` (данные авторизации приложения; `null`, если
+провайдер зарегистрирован не из приложения), `callbackUrl`, `errorCallbackUrl`, `ttl`.
 
-- `audio`: `prompt` is an object `{file, fileExtension, fields: {type, prompt}}`; the file may
-  come without an extension — use `fields.type`.
-- `image`: `prompt` is `{prompt, style, format: square|portrait|landscape|null, images_number}`.
+- `audio`: `prompt` — объект `{file, fileExtension, fields: {type, prompt}}`; файл может прийти
+  без расширения — брать `fields.type`.
+- `image`: `prompt` — `{prompt, style, format: square|portrait|landscape|null, images_number}`.
 
-Reference endpoint from Bitrix24: https://helpdesk.bitrix24.ru/examples/endpoint.zip
+Эталонный обработчик от Битрикс24: https://helpdesk.bitrix24.ru/examples/endpoint.zip
 
-## Unverified — stage 1 must measure
+## Не проверено — замерить на этапе 1
 
-1. Which category feeds which selector (CRM "расшифровка звонков" is probably `call`, the other
-   CRM selectors — summary, script scoring, auto-activities — probably `text`).
-2. `prompt` shape for `call`, `vision`, `classify` — not documented.
-3. Success callback shape for `image` and `audio` (URL, array, text?) — not documented.
-4. What `auth` contains (`application_token`, `member_id`, `domain`?) — decides how we verify
-   that a request really comes from an installed portal.
-5. ~~Re-`register` with the same `code`~~ — measured via webhook, see below: it fails with
-   `ENGINE_REGISTER_ERROR_CODE_UNIQUE`. From an app context (`app_code` set) — still to confirm.
-6. Bitrix24 behaviour on error callback and on expired `ttl`.
+1. Какая категория питает какой список выбора (в CRM «расшифровка звонков» — вероятно `call`,
+   остальные списки CRM — резюме, оценка по скрипту, автодела — вероятно `text`).
+2. Форма `prompt` для `call`, `vision`, `classify` — не описана.
+3. Форма успешного callback для `image` и `audio` (URL, массив, текст?) — не описана.
+4. Что лежит в `auth` (`application_token`, `member_id`, `domain`?) — от этого зависит, как мы
+   проверяем, что запрос правда пришёл с установленного портала.
+5. ~~Повторный `register` с тем же `code`~~ — замерено вебхуком, см. ниже: падает с
+   `ENGINE_REGISTER_ERROR_CODE_UNIQUE`. Из контекста приложения (`app_code` задан) — подтвердить.
+6. Поведение Битрикс24 на error callback и на истёкший `ttl`.
 
-## Measured on the test portal (2026-09-28)
+## Замерено на тестовом портале (2026-09-28)
 
-Portal `b24-ypkv9c.bitrix24.by` (cloud, zone `.by`), admin inbound webhook, raw REST. Temporary
-providers `sh_aiconnect_probe*` were registered and removed in the same run; `ai.engine.list` was
-empty before and after.
+Портал `b24-ypkv9c.bitrix24.by` (облако, зона `.by`), входящий вебхук администратора, REST
+напрямую. Временные провайдеры `sh_aiconnect_probe*` зарегистрированы и сняты в том же прогоне;
+`ai.engine.list` пуст до и после.
 
-- `methods` with `scope: ai_admin` → `ai.engine.register`, `ai.engine.unregister`,
+- `methods` с `scope: ai_admin` → `ai.engine.register`, `ai.engine.unregister`,
   `ai.engine.list`, `ai.prompt.register`, `ai.prompt.unregister`, `ai.history.enable`,
-  `ai.history.disable`, `ai.history.list`. The `ai.prompt.*` / `ai.history.*` methods are not
-  used yet.
-- `ai.engine.register` returns the numeric id. Registered via webhook, the provider has
-  `app_code: null` in `ai.engine.list` — so such a provider gets `auth: null` in requests (docs);
-  our providers must be registered from the app context.
-- Second `register` with the same `code` → `400 ENGINE_REGISTER_ERROR_CODE_UNIQUE`, the record is
-  unchanged. Re-registration is `unregister` + `register` until the app context says otherwise.
-- `completions_url` answering 404 → `400 ENGINE_REGISTER_ERROR_COMPLETIONS_URL_FAIL`: the GET
-  check on registration is real. A URL answering 200 (`https://example.com/`) is accepted.
-- `category: vision` is accepted, although the docs' error text lists only `text, image, audio,
-  call`.
-- `ai.engine.unregister` → `true` for an existing code, `false` for an unknown one (no error).
-- `ai.engine.list` fields: `id`, `app_code`, `name`, `code`, `category`, `completions_url`,
-  `settings` (`model_context_type`, `model_context_limit` as sent), `date_create` (unix seconds).
-- Webhook limits: `event.get` → `403 WRONG_AUTH_TYPE`; `app.info` answers without `CODE`. Both
-  need the installed app.
+  `ai.history.disable`, `ai.history.list`. Методы `ai.prompt.*` / `ai.history.*` пока не
+  используем.
+- `ai.engine.register` возвращает числовой id. Провайдер, зарегистрированный вебхуком, в
+  `ai.engine.list` имеет `app_code: null` — значит, в запросах ему придёт `auth: null`
+  (документация); наших провайдеров регистрировать из контекста приложения.
+- Второй `register` с тем же `code` → `400 ENGINE_REGISTER_ERROR_CODE_UNIQUE`, запись не
+  меняется. Перерегистрация — `unregister` + `register`, пока контекст приложения не покажет иное.
+- `completions_url`, отвечающий 404 → `400 ENGINE_REGISTER_ERROR_COMPLETIONS_URL_FAIL`: проверка
+  GET при регистрации настоящая. Адрес, отвечающий 200 (`https://example.com/`), принимается.
+- `category: vision` принимается, хотя текст ошибки в документации перечисляет только `text,
+  image, audio, call`.
+- `ai.engine.unregister` → `true` для существующего кода, `false` для неизвестного (не ошибка).
+- Поля `ai.engine.list`: `id`, `app_code`, `name`, `code`, `category`, `completions_url`,
+  `settings` (`model_context_type`, `model_context_limit` — как отправили), `date_create`
+  (секунды unix).
+- Ограничения вебхука: `event.get` → `403 WRONG_AUTH_TYPE`; `app.info` отвечает без `CODE`.
+  Обоим нужно установленное приложение.
 
-## Market landscape (2026-09-28)
+## Рынок (2026-09-28)
 
-| App | What it is | Relevance |
+| Приложение | Что это | Значение для нас |
 |---|---|---|
-| `skyweb24.copilotopenai` | provider via `ai_admin` (+ `im`, `user_brief`), cloud only, OpenAI models (text, image, audio); own key needs a user-supplied HTTP proxy, or their key with prepaid balance | the only direct competitor; OpenAI-only, proxy is a pain for RU/BY clients |
-| `itnebo.chatgpt_midjorney` | standalone chat window, no `ai_admin` | not a provider, not in BitrixGPT selectors |
-| `itnebo.openline_ai` | open-lines chatbot (`imbot`, `imopenlines`, `crm`, `bizproc`…), resold tokens | different niche |
+| `skyweb24.copilotopenai` | провайдер через `ai_admin` (+ `im`, `user_brief`), только облако, модели OpenAI (текст, картинки, аудио); свой ключ — только через HTTP-прокси пользователя, или их ключ с предоплатой | единственный прямой конкурент; только OpenAI, прокси — боль для клиентов из РФ/РБ |
+| `itnebo.chatgpt_midjorney` | отдельное окно чата, без `ai_admin` | не провайдер, в списках BitrixGPT его нет |
+| `itnebo.openline_ai` | чат-бот открытых линий (`imbot`, `imopenlines`, `crm`, `bizproc`…), перепродаёт токены | другая ниша |
 
-Positioning: **we sell the connection** — "your key, your model inside BitrixGPT". Any
-OpenAI-compatible provider via configurable `baseURL`; DeepSeek first (reachable from RU/BY
-without a proxy).
+Позиционирование: **продаём подключение** — «ваш ключ, ваша модель внутри BitrixGPT». Любой
+OpenAI-совместимый провайдер через настраиваемый `baseURL`; первым — DeepSeek (доступен из РФ/РБ
+без прокси).
 
 ## DeepSeek
 
-OpenAI-compatible API, text only — covers `text` (and likely `classify`); no audio, image or
-vision. Model ids change between releases — take them from the provider's `GET /models`, never
-hard-code.
+OpenAI-совместимый API. Покрывает `text` (и, вероятно, `classify`); аудио и генерации картинок
+нет. Идентификаторы моделей меняются от релиза к релизу — брать их из `GET /models` провайдера,
+в код не зашивать.
