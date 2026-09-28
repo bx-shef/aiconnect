@@ -3,6 +3,7 @@
 // состоянии. Администратору — ещё и что не настроено на сервере приложения (GET /api/health,
 // app/utils/serverHealth.ts) и код приложения для B24_APP_CODE: изнутри портала его видно через
 // `app.info`, а без него сервер отклоняет запросы из портала.
+import { isPortalAdmin } from '~/utils/profile'
 import { serverProblems, type ServerProblem } from '~/utils/serverHealth'
 
 const b24 = useB24()
@@ -25,9 +26,7 @@ onMounted(async () => {
   if (!await b24.init()) return
   b24.getOrThrow().parent.setTitle('aiconnect')
   try {
-    const profile = await b24.call<{ ADMIN?: unknown }>('profile')
-    // Флаг из profile — тот же, что проверяет сервер (frameAuth.ts); `auth.isAdmin` фрейма — запасной.
-    isAdmin.value = profile?.ADMIN === true || b24.getOrThrow().auth.isAdmin
+    isAdmin.value = isPortalAdmin(await b24.call<unknown>('profile'), b24.getOrThrow().auth.isAdmin)
   } catch (e) {
     loadError.value = e instanceof Error ? e.message : String(e)
   }

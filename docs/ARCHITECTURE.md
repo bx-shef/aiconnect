@@ -52,7 +52,8 @@ TLS Let's Encrypt, адрес `https://aiconnect.bx-shef.by` (`docs/DEPLOY.md`).
 ```
 app/config/b24.ts  права, события, настройки SDK — одно место
 app/utils/         чистые помощники страниц, покрыты тестами: установка (install), свежесть
-                   токена фрейма (frameToken), что не настроено на сервере (serverHealth)
+                   токена фрейма (frameToken), что не настроено на сервере (serverHealth),
+                   администратор ли (profile)
 app/composables/   useB24 (фрейм, REST v2), useApi (наш /api с фрейм-токеном)
 app/components/    InPortalGate
 server/api/        b24/events (установка и удаление), health — тонкие обёртки: решение
@@ -65,7 +66,8 @@ server/utils/      проверка фрейм-токена (frameAuth), SSRF-г
 ```
 
 `shared/` сейчас нет: общих для страниц и сервера правил этапу 0 не нужно. Алиас `#shared`
-оставлен — он встроен в Nuxt.
+оставлен: в Nuxt он встроен, а для тестов продублирован в `vitest.config.ts` и
+`vitest.smoke.config.ts`.
 
 ## Кто и какими правами ходит в портал
 

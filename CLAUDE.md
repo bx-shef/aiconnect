@@ -32,7 +32,7 @@ pnpm build            # сборка сервера .output/server/index.mjs
 |---|---|
 | `app/pages/` | `index` (публичная), `install` (установка: права, события, `installFinish`), `app` (главная в портале; администратору — что не настроено на сервере) |
 | `app/composables/` | `useB24` (фрейм, REST v2), `useApi` (наш /api с фрейм-токеном) |
-| `app/utils/` | `install` (шаги установки), `frameToken` (свежесть токена фрейма), `serverHealth` (что не настроено на сервере) |
+| `app/utils/` | `install` (шаги установки), `frameToken` (свежесть токена фрейма), `serverHealth` (что не настроено на сервере), `profile` (администратор ли) |
 | `app/config/b24.ts` | права (`ai_admin`, `user_brief`), события, настройки SDK (без автоповторов записи) — одно место |
 | `server/api/` | тонкие обёртки: `b24/events` (установка/удаление), `health` (флаги настроек и коммит сборки) |
 | `server/middleware/` | `securityHeaders` (CSP для фрейма), `requestLimits` (размер тела) |
@@ -56,14 +56,14 @@ pnpm build            # сборка сервера .output/server/index.mjs
   с автоимпортами Nitro (`useStorage`, `createError`) — только в обработчиках, `server/middleware/`
   и `requestContext.ts`, чтобы чистые модули импортировались в тестах. Решение обработчика —
   в чистом модуле с внедряемыми зависимостями (`b24EventsHandler`); на клиенте — так же
-  (`app/utils/install`, `serverHealth`).
+  (`app/utils/install`, `serverHealth`, `profile`).
 - **Секреты — только окружением** (`.env.example`). Токены, API-ключи клиентов, промпты и ответы
   моделей в журнал не пишем. Ключи клиентов — только зашифрованными (`secretCrypto`).
 - **Язык** — по таблице `docs/AGENT_RULES.md` §0: код, JSDoc, комментарии, тесты, коммиты — по-английски;
   документация — на языке файла, новая — по-английски; PR, issues и отчёты — по-русски. Код,
   перенесённый из шаблона `invoice-from-tasks`, пока комментирован по-русски.
 - **Штамп `> Last reviewed: YYYY-MM-DD`** под заголовком каждого `.md`.
-- **Компоненты из подкаталогов — с приставкой каталога**: `components/settings/General.vue` —
+- **Компоненты из подкаталогов — с приставкой каталога**: например, будущий `components/settings/General.vue` —
   тег `<SettingsGeneral>`. Незнакомый тег Vue рисует пустым без ошибки; ловит `pnpm typecheck`
   (`checkUnknownComponents` в `tsconfig.json`).
 - **Тест должен краснеть при мутации кода** (`AGENT_RULES.md` §5.2); откат мутации — из копии,
