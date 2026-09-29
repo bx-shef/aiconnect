@@ -36,11 +36,19 @@ b24jssdk. Из установленного приложения `shef.aiconnect
 
 Встройки (`placement`), CRM, задачи и каталог шаблона приложению не нужны: их права сняты.
 
-## Провайдер BitrixGPT (право `ai_admin`) — этапы 1–3
+## Провайдер BitrixGPT (право `ai_admin`)
+
+Сейчас зовёт только шпион протокола этапа 1 (`pages/spy.vue`, план вызовов — `app/utils/spy.ts`),
+из фрейма, правами администратора: провайдер, зарегистрированный вебхуком, получает
+`app_code: null` и, значит, `auth: null` в запросах (замер, `docs/RESEARCH.md`). Коды шпиона —
+`sh_aiconnect_spy_<category>`, имя — `TEST <category>`; коды продукта `sh_aiconnect_<category>`
+появятся на этапе 3.
 
 | Метод | Транспорт | Файл | Назначение, грабли | Статус |
 |---|---|---|---|---|
-| `ai.engine.register` | — (ещё не зовётся) | упомянут в `app/config/b24.ts`, `pages/install.vue` | Регистрация провайдера `sh_aiconnect_<category>`. `completions_url` должен ответить 200 на GET при регистрации. Протокол и непроверенное — `docs/RESEARCH.md`; появится в коде на этапе 1. | 📄 |
+| `ai.engine.register` | фрейм | `pages/spy.vue`, параметры — `app/utils/spy.ts` (`registerParams`) | `name`, `code`, `category`, `completions_url`, `settings` (`model_context_type: token`, `model_context_limit: 16000` — наше круглое значение для шпиона; по умолчанию у портала 15666). При регистрации портал шлёт GET на `completions_url` и ждёт 200 — отвечает `server/api/engine/[portal]/[category].ts`. Повторный `register` с тем же `code` → `ENGINE_REGISTER_ERROR_CODE_UNIQUE` (замер вебхуком 2026-09-28), поэтому при смене адреса — сначала `unregister` (`registerPlan`). | ✅ вебхуком; из приложения — 📄 |
+| `ai.engine.unregister` | фрейм | `pages/spy.vue` (`unregisterPlan`) | `code`. Ответ `true` — снят, `false` — не найден или чужой (замер). | ✅ вебхуком; из приложения — 📄 |
+| `ai.engine.list` | фрейм | `pages/spy.vue` (`parseEngineList`) | Что уже зарегистрировано: состояние «зарегистрирован / старый адрес». В контексте приложения — только провайдеры этого приложения (документация). Поля — `docs/RESEARCH.md`. | ✅ вебхуком; из приложения — 📄 |
 
 ## Установка и события (базовое право)
 

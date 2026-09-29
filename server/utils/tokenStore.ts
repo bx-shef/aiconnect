@@ -10,6 +10,7 @@
 
 import { DEFAULT_OAUTH_HOST } from './b24Host'
 import { decryptSecret, encryptSecret } from './secretCrypto'
+import { clearSpyData } from './spy'
 
 export interface PortalRecord {
   memberId: string
@@ -113,11 +114,12 @@ export async function updateTokens(kv: KeyValue, memberId: string, tokens: { acc
   })
 }
 
-/** Удаление всего, что мы знаем о портале (событие удаления приложения). */
+/** Удаление всего, что мы знаем о портале (событие удаления приложения), включая записи шпиона протокола. */
 export async function removePortal(kv: KeyValue, memberId: string): Promise<void> {
   const prev = await getPortal(kv, memberId)
   if (prev) await removeDomainIfOwned(kv, prev.domain, prev.memberId)
   await kv.removeItem(portalKey(memberId))
+  await clearSpyData(kv, memberId)
 }
 
 function decryptOrEmpty(blob: string): string {

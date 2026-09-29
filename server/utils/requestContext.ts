@@ -27,11 +27,7 @@ export interface RequestContext {
   frameCall: RestCall
 }
 
-/**
- * Проверяет фрейм-токен запроса. Бросает h3-ошибку с кодом, если пустить нельзя.
- * Сейчас его не зовёт ни один обработчик: страницы этапа 0 к нашему /api с токеном не ходят.
- * Оставлен вместе с frameAuth как инфраструктура настроек (этап 3 docs/PLAN.md).
- */
+/** Проверяет фрейм-токен запроса (зовут `/api/spy`). Бросает h3-ошибку с кодом, если пустить нельзя. */
 export async function requireFrameUser(event: H3Event): Promise<RequestContext> {
   const headers = getRequestHeaders(event)
   const auth = extractFrameAuth({ get: name => headers[name] })

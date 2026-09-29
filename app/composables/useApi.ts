@@ -21,10 +21,10 @@ export function useApi() {
     return { 'Authorization': `Bearer ${auth.access_token}`, 'X-B24-Domain': auth.domain }
   }
 
-  /** POST в наш API. Ошибку сервера превращает в {@link ApiError} с его текстом. */
-  async function post<T>(url: string, body: unknown): Promise<T> {
+  /** Запрос в наш API. Ошибку сервера превращает в {@link ApiError} с его текстом. */
+  async function request<T>(url: string, method: 'GET' | 'POST', body?: unknown): Promise<T> {
     try {
-      const res = await $fetch(url, { method: 'POST', body: body as Record<string, unknown>, headers: await authHeaders() })
+      const res = await $fetch(url, { method, body: body as Record<string, unknown> | undefined, headers: await authHeaders() })
       return res as T
     } catch (e) {
       const err = e as { statusCode?: number, statusMessage?: string, data?: { statusMessage?: string, error?: string } }
@@ -33,5 +33,8 @@ export function useApi() {
     }
   }
 
-  return { post }
+  const get = <T>(url: string) => request<T>(url, 'GET')
+  const post = <T>(url: string, body: unknown) => request<T>(url, 'POST', body)
+
+  return { get, post }
 }
