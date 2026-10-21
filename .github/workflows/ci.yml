@@ -1,7 +1,7 @@
 name: CI
 
 # PR   → ci (линт → тесты → типы → сборка) + docker-build (образ собирается, в реестр не идёт).
-# main → ci → deploy (образ в GHCR; Watchtower на сервере подхватит его за ~5 минут).
+# main → только deploy, проверки уже прошли на PR (образ в GHCR; Watchtower на сервере подхватит его за ~5 минут).
 # Схема — как в эталоне client-bank-alfa-by (docs/DEPLOY.md).
 #
 # Имена джоб `ci` и `docker-build` — обязательные проверки в правиле защиты `main`
@@ -33,7 +33,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   # Отменяем только устаревшие прогоны PR; выкат `main` посреди отправки в GHCR не обрываем.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
@@ -43,6 +43,8 @@ permissions:
 jobs:
   ci:
     name: ci
+    # На push в main не повторяем: тот же коммит уже проверен в PR (bx-shef/toolsai#312).
+    if: github.event_name != 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
 
@@ -101,9 +103,9 @@ jobs:
 
   deploy:
     name: Build & Push to GHCR
-    # Красный CI не пускает образ в GHCR, а значит и на сервер. Выкатывает только `main` —
+    # Выкатывает только `main` —
     # пушем или ручным запуском (workflow_dispatch).
-    needs: ci
+    # Без needs: ci — проверки идут на PR, на push только публикация (bx-shef/toolsai#312).
     if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20

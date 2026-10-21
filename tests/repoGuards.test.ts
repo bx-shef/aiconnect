@@ -56,9 +56,12 @@ describe('выкат (docs/DEPLOY.md): main → GHCR → Watchtower → nginx-pr
     return next < 0 ? CI.slice(start) : CI.slice(start, start + 1 + next)
   })()
 
-  it('deploy ждёт зелёный ci и выкатывает только main — пушем или ручным запуском', () => {
+  it('ci — на PR (на push не повторяется), deploy выкатывает только main — пушем или ручным запуском', () => {
     expect(DEPLOY, 'нет джобы deploy').not.toBe('')
-    expect(DEPLOY).toMatch(/^ {4}needs: (?:ci|\[[^\]]*\bci\b[^\]]*\])\s*$/m)
+    // bx-shef/toolsai#312: проверки — на PR (required `ci`), на push в main — только публикация.
+    // Без `needs: ci`: ci на push пропускается, и deploy с needs пропустился бы вместе с ним.
+    expect(DEPLOY).not.toMatch(/^ {4}needs:/m)
+    expect(CI).toMatch(/^ {4}name: ci\n(?: {4}#.*\n)* {4}if: github\.event_name != 'push'$/m)
     // Условие целиком: `&&` → `||` пустил бы в GHCR как latest образ любой ветки.
     expect(DEPLOY).toMatch(/^ {4}if: \$\{\{ \(github\.event_name == 'push' \|\| github\.event_name == 'workflow_dispatch'\) && github\.ref == 'refs\/heads\/main' \}\}$/m)
     expect(DEPLOY).toMatch(/^ {10}push: true$/m)
