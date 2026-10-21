@@ -1,6 +1,6 @@
 # Развернуть и подключить к порталу
 
-> Last reviewed: 2026-09-28
+> Last reviewed: 2026-10-21
 
 ## Как устроен выкат
 
@@ -10,10 +10,10 @@ Let's Encrypt). Адрес приложения — **`https://aiconnect.bx-shef
 | Шаг | Что происходит |
 |---|---|
 | PR → `main` | `ci` (линт, тесты, типы, сборка) + `docker-build` (образ собирается, в реестр не идёт) |
-| push в `main` | `ci` → `deploy`: образ `ghcr.io/bx-shef/aiconnect` с тегами `latest` и `sha-<коммит>` |
+| push в `main` | только `deploy`: образ `ghcr.io/bx-shef/aiconnect` с тегами `latest` и `sha-<коммит>` |
 | сервер | Watchtower раз в ~5 минут видит новый `latest` и пересоздаёт контейнер; nginx-proxy выставляет его наружу по `VIRTUAL_HOST` и выпускает сертификат |
 
-- `deploy` ждёт зелёный `ci`: красный CI до сервера не доходит.
+- Проверки (`ci`) идут на PR и на push в `main` не повторяются; `deploy` на `main` только публикует образ (bx-shef/toolsai#312).
 - В GHCR пушит встроенный `GITHUB_TOKEN` (`packages: write`), отдельный секрет не нужен.
 - Образ один на любой сервер: адрес и секреты он читает из окружения при запуске. Единственный
   build-arg — коммит сборки: его показывает `GET /api/health` (`commit`) и `make doctor`.
