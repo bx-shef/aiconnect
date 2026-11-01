@@ -1,16 +1,12 @@
 # aiconnect
 
-> Last reviewed: 2026-09-28
+> Last reviewed: 2026-11-01
 
-Приложение для облачного Битрикс24 **`shef.aiconnect`**: подключает вашу модель (ваш API-ключ)
-к BitrixGPT как AI-провайдера (`ai.engine.register`). Модель появится в списках выбора модели в
-настройках BitrixGPT рядом со штатными. Первый провайдер — DeepSeek; дальше любой
-OpenAI-совместимый.
-
-Статус: **каркас (этап 0)** — приложение ставится в портал и сохраняет токены установки;
-подключения моделей ещё нет. План — [`docs/PLAN.md`](docs/PLAN.md), как это устроено у
-Битрикс24 — [`docs/RESEARCH.md`](docs/RESEARCH.md). Репозиторий начат с шаблона
-[`invoice-from-tasks`](https://github.com/bx-shef/invoice-from-tasks); его предметная часть удалена.
+**Шпион протокола BitrixGPT** для облачного Битрикс24 (`shef.aiconnect`): регистрирует сторонний
+AI-движок (`ai.engine.register`) и показывает администратору, что BitrixGPT присылает движку в
+каждом сценарии — чат, задачи, CRM, звонки. Инструмент разведки для тестовых порталов, модели за
+ним нет. План — [`docs/PLAN.md`](docs/PLAN.md), замеры — [`docs/PROTOCOL.md`](docs/PROTOCOL.md).
+Подключение собственной модели клиента к BitrixGPT — отдельное облачное приложение.
 
 ## Быстрый старт
 
@@ -33,7 +29,7 @@ pnpm build && node .output/server/index.mjs
 
 Node.js 22+, pnpm 10 (версия — в `packageManager`). Публичный https-адрес для сервера.
 Облачный Битрикс24 (в коробке `ai.engine.register` недоступен). Права приложения в портале:
-`ai_admin`, `user_brief`.
+`ai_admin`, `user_brief`; для тестовых звонков — `telephony`, `crm`.
 
 ## Команды
 
