@@ -6,6 +6,8 @@
 
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
 import { isAllowedPortalHost, parseSelfHostedHosts } from './b24Host'
+import { withKeyLock } from './keyLock'
+import { addJournalEntry, clearJournalData, getScenario, maskForJournal, setJournalCallback, spyFullEnabled } from './spyJournal'
 import type { KeyValue } from './tokenStore'
 
 /** Categories accepted by `ai.engine.register` (docs; `vision` confirmed on the test portal). */
@@ -192,6 +194,10 @@ export interface Capture {
   bodyBytes: number
   contentType: string
   body: unknown
+  /** Scenario label set on the spy page when the request came (`''` — none). */
+  scenario?: string
+  /** Id of the full-text record (only with B24_SPY_FULL=1, spyJournal.ts). */
+  journalId?: string
   callback: { target: 'errorCallbackUrl' | 'callbackUrl' | 'none', host?: string, samePortal?: boolean, status?: number, error?: string }
 }
 
@@ -201,21 +207,9 @@ const modeKey = (memberId: string) => `spymode:${memberId.toLowerCase()}`
 /**
  * Per-portal serialization of read-modify-write on the capture list: without it a callback's
  * update, finishing after 202, could overwrite a capture added in between (finding of
- * /code-review). One process holds the store (docs/ARCHITECTURE.md), so an in-memory chain is enough.
+ * /code-review).
  */
-const locks = new Map<string, Promise<void>>()
-async function withLock(memberId: string, fn: () => Promise<void>): Promise<void> {
-  const key = memberId.toLowerCase()
-  const prev = locks.get(key) ?? Promise.resolve()
-  const next = prev.then(fn, fn)
-  const settled = next.catch(() => undefined)
-  locks.set(key, settled)
-  try {
-    await next
-  } finally {
-    if (locks.get(key) === settled) locks.delete(key)
-  }
-}
+const withLock = (memberId: string, fn: () => Promise<void>) => withKeyLock(`spy:${memberId.toLowerCase()}`, fn)
 
 export async function listCaptures(kv: KeyValue, memberId: string): Promise<Capture[]> {
   const value = await kv.getItem(capturesKey(memberId))
@@ -250,6 +244,7 @@ export async function clearCaptures(kv: KeyValue, memberId: string): Promise<voi
 export async function clearSpyData(kv: KeyValue, memberId: string): Promise<void> {
   await clearCaptures(kv, memberId)
   await kv.removeItem(modeKey(memberId))
+  await clearJournalData(kv, memberId)
 }
 
 export async function getSpyMode(kv: KeyValue, memberId: string): Promise<SpyMode> {
@@ -293,19 +288,35 @@ export async function handleEngineRequest(segment: string, category: string, raw
     parsed = undefined
   }
   const body = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null
+  const scenario = await getScenario(deps.kv, memberId)
+  const full = spyFullEnabled(true, deps.env)
   const capture: Capture = {
     id: randomUUID(),
     at: (deps.now?.() ?? new Date()).toISOString(),
     category,
+    scenario,
     keys: body ? Object.keys(body) : [],
     bodyBytes: Buffer.byteLength(raw),
     contentType,
     body: fitCaptureBudget(body ? sanitizeForCapture(body) : sanitizeForCapture(raw)),
     callback: { target: 'none' }
   }
+  if (full) {
+    capture.journalId = capture.id
+    await addJournalEntry(deps.kv, memberId, {
+      id: capture.id,
+      at: capture.at,
+      scenario,
+      category,
+      contentType,
+      size: capture.bodyBytes,
+      body: maskForJournal(body ?? raw),
+      callback: capture.callback
+    })
+  }
   await addCapture(deps.kv, memberId, capture)
   // Structure only: prompts and answers never go to the log (CLAUDE.md, secrets and texts).
-  deps.log?.(`[engine] ${memberId} ${category} ${capture.bodyBytes}B keys=${capture.keys.join(',')}`)
+  deps.log?.(`[engine] ${memberId} ${category} ${capture.bodyBytes}B keys=${capture.keys.join(',')}${scenario ? ` scenario=${scenario}` : ''}${full ? ' full' : ''}`)
   if (!body) return { status: 400, body: { error: 'JSON object expected' } }
 
   const mode = await getSpyMode(deps.kv, memberId)
@@ -330,6 +341,7 @@ export async function handleEngineRequest(segment: string, category: string, raw
         }
       }
       await updateCapture(deps.kv, memberId, capture)
+      if (capture.journalId) await setJournalCallback(deps.kv, memberId, capture.journalId, capture.callback)
     }
   }
 }

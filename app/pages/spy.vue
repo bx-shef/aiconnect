@@ -7,18 +7,25 @@ import { isPortalAdmin } from '~/utils/profile'
 import { engineState, parseEngineList, registerPlan, unregisterPlan, type EngineRecord, type SpyEngine } from '~/utils/spy'
 
 interface Capture {
+  id?: string
   at: string
   category: string
   keys: string[]
   bodyBytes: number
   contentType: string
   body: unknown
+  scenario?: string
+  journalId?: string
   callback: { target: string, host?: string, samePortal?: boolean, status?: number, error?: string }
 }
 interface SpyState {
   enabled: boolean
+  /** Full-text journal on (B24_SPY_FULL=1 on the server). */
+  full: boolean
   engines: SpyEngine[]
   mode: 'error' | 'echo'
+  scenario: string
+  journal: { entries: number, bytes: number, scenarios: string[] } | null
   captures: Capture[]
 }
 
@@ -29,6 +36,10 @@ const state = ref<SpyState | null>(null)
 const registered = ref<EngineRecord[]>([])
 const busy = ref(false)
 const error = ref('')
+const scenarioInput = ref('')
+const exportScenario = ref('')
+/** Full records opened from the capture list, by journal id. */
+const fullText = ref<Record<string, unknown>>({})
 
 const stateLabel = { absent: 'не зарегистрирован', ok: 'зарегистрирован', stale: 'старый адрес' } as const
 
@@ -37,6 +48,7 @@ async function load(keepError = false): Promise<void> {
   if (!keepError) error.value = ''
   try {
     state.value = await api.get<SpyState>('/api/spy')
+    scenarioInput.value = state.value.scenario ?? ''
     if (state.value.enabled) registered.value = parseEngineList(await b24.call('ai.engine.list'))
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
@@ -67,6 +79,27 @@ const setMode = (mode: 'error' | 'echo') => run(async () => {
 })
 const clearCaptures = () => run(async () => {
   await api.post('/api/spy', { clear: true })
+})
+const saveScenario = () => run(async () => {
+  await api.post('/api/spy', { scenario: scenarioInput.value })
+})
+const clearJournal = () => run(async () => {
+  await api.post('/api/spy', { clearJournal: true })
+  fullText.value = {}
+})
+const showFull = (id: string) => run(async () => {
+  fullText.value = { ...fullText.value, [id]: await api.get<unknown>(`/api/spy/journal?id=${encodeURIComponent(id)}`) }
+})
+/** The journal goes through our API with the frame token, so the file is built here, not by a link. */
+const downloadJournal = () => run(async () => {
+  const q = exportScenario.value ? `?scenario=${encodeURIComponent(exportScenario.value)}` : ''
+  const data = await api.get<unknown>(`/api/spy/journal${q}`)
+  const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }))
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `spy-journal${exportScenario.value ? `-${exportScenario.value}` : ''}.json`
+  a.click()
+  URL.revokeObjectURL(url)
 })
 
 onMounted(async () => {
@@ -207,6 +240,81 @@ onMounted(async () => {
 
         <B24Card>
           <template #header>
+            <h2 class="font-semibold">
+              Сценарий и полный журнал
+            </h2>
+          </template>
+          <p class="text-sm mb-2">
+            Метка сценария ставится на следующие запросы (латиница, цифры, «.», «_», «-», до 64 знаков,
+            например <span class="font-mono">chat.deal-stage</span>). Пусто — без метки.
+          </p>
+          <div class="flex flex-wrap gap-2 items-center">
+            <B24Input
+              v-model="scenarioInput"
+              placeholder="сценарий"
+              data-testid="spy-scenario"
+            />
+            <B24Button
+              color="air-secondary"
+              label="Сохранить метку"
+              :loading="busy"
+              data-testid="spy-scenario-save"
+              @click="saveScenario"
+            />
+            <span class="text-sm">Сейчас: <b data-testid="spy-scenario-current">{{ state.scenario || '—' }}</b></span>
+          </div>
+          <p
+            class="text-sm mt-3"
+            data-testid="spy-full"
+          >
+            Полный текст: <b>{{ state.full ? 'вкл' : 'выкл' }}</b>.
+            <template v-if="state.full && state.journal">
+              В журнале {{ state.journal.entries }} запросов, {{ (state.journal.bytes / 1024).toFixed(0) }} КБ
+              (хранится до 500 запросов и 50 МБ; auth и адреса callback скрыты).
+            </template>
+            <template v-else>
+              Включается переменной B24_SPY_FULL=1 на сервере стенда; без неё строки обрезаны до 500 знаков.
+            </template>
+          </p>
+          <div
+            v-if="state.full && state.journal"
+            class="flex flex-wrap gap-2 items-center mt-2"
+          >
+            <select
+              v-model="exportScenario"
+              class="border rounded px-2 py-1 text-sm"
+              data-testid="spy-export-scenario"
+            >
+              <option value="">
+                все сценарии
+              </option>
+              <option
+                v-for="sc in state.journal.scenarios"
+                :key="sc"
+                :value="sc"
+              >
+                {{ sc }}
+              </option>
+            </select>
+            <B24Button
+              color="air-primary"
+              label="Скачать журнал"
+              :loading="busy"
+              data-testid="spy-download"
+              @click="downloadJournal"
+            />
+            <B24Button
+              color="air-secondary"
+              label="Очистить журнал"
+              :loading="busy"
+              data-testid="spy-journal-clear"
+              @click="clearJournal"
+            />
+          </div>
+        </B24Card>
+
+        <B24Card>
+          <template #header>
             <div class="flex items-center justify-between gap-2">
               <h2 class="font-semibold">
                 Пойманные запросы ({{ state.captures.length }})
@@ -237,18 +345,35 @@ onMounted(async () => {
           </p>
           <details
             v-for="(c, i) in state.captures"
-            :key="`${c.at}-${c.category}`"
+            :key="c.id ?? `${c.at}-${c.category}`"
             class="border-t py-2"
             :data-testid="`spy-capture-${i}`"
           >
             <summary class="cursor-pointer text-sm">
-              {{ c.at }} · <b>{{ c.category }}</b> · {{ c.bodyBytes }} Б ·
+              {{ c.at }} · <b>{{ c.category }}</b>{{ c.scenario ? ` · ${c.scenario}` : '' }} · {{ c.bodyBytes }} Б ·
               callback: {{ c.callback.target }}{{ c.callback.status ? ` → ${c.callback.status}` : '' }}{{ c.callback.error ? ` (${c.callback.error})` : '' }}
             </summary>
             <p class="text-xs mt-1">
               Ключи: <span class="font-mono">{{ c.keys.join(', ') }}</span> · Content-Type: <span class="font-mono">{{ c.contentType || '—' }}</span>
             </p>
-            <pre class="text-xs whitespace-pre-wrap break-all mt-1">{{ JSON.stringify(c.body, null, 2) }}</pre>
+            <B24Button
+              v-if="state.full && c.journalId && !fullText[c.journalId]"
+              class="mt-1"
+              color="air-secondary"
+              size="sm"
+              label="Показать полностью"
+              :loading="busy"
+              :data-testid="`spy-capture-full-${i}`"
+              @click="showFull(c.journalId)"
+            />
+            <pre
+              v-if="c.journalId && fullText[c.journalId]"
+              class="text-xs whitespace-pre-wrap break-all mt-1 max-h-[32rem] overflow-auto"
+            >{{ JSON.stringify(fullText[c.journalId], null, 2) }}</pre>
+            <pre
+              v-else
+              class="text-xs whitespace-pre-wrap break-all mt-1"
+            >{{ JSON.stringify(c.body, null, 2) }}</pre>
           </details>
         </B24Card>
       </template>
