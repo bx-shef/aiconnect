@@ -132,11 +132,13 @@ describe('установка (ONAPPINSTALL)', () => {
     expect(d.kv.data.size).toBe(0)
   })
 
-  it('реквизиты выбираются по домену установки из гарда (коробка-стенд шпиона — свои)', async () => {
-    const credsFor = vi.fn(() => ({ clientId: 'cid', clientSecret: 'csecret' }))
+  it('реквизиты выбираются по домену установки из гарда и именно они идут на сверку', async () => {
+    const box = { clientId: 'box-id', clientSecret: 'box-secret' }
+    const credsFor = vi.fn((domain: string) => domain === 'demo.bitrix24.ru' ? box : { clientId: 'cid', clientSecret: 'csecret' })
     const d = deps({ credsFor })
     await handleB24Event(body('ONAPPINSTALL', installAuth), d)
     expect(credsFor).toHaveBeenCalledWith('demo.bitrix24.ru')
+    expect(d.refresh).toHaveBeenCalledWith('sent-refresh', 'oauth.bitrix24.tech', box)
   })
 
   it('задан только один из B24_CLIENT_ID/SECRET — тоже 503, а не попытка сверки', async () => {

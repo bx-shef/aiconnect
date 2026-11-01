@@ -193,3 +193,15 @@ describe('реестр REST-методов (docs/REST_METHODS.md)', () => {
     expect(missing, `Нет в docs/REST_METHODS.md:\n${missing.join('\n')}`).toEqual([])
   })
 })
+
+describe('реквизиты приложения — по домену портала (коробка-стенд шпиона, #25)', () => {
+  it('фрейм и события берут реквизиты и код через appForPortal, не напрямую из окружения', () => {
+    const ctx = readFileSync(join(ROOT, 'server/utils/requestContext.ts'), 'utf8')
+    expect(ctx).toMatch(/appForPortal\(auth\.domain\)/)
+    expect(ctx).not.toMatch(/oauthCredsFromEnv|B24_APP_CODE/)
+    const events = readFileSync(join(ROOT, 'server/api/b24/events.post.ts'), 'utf8')
+    expect(events).toMatch(/credsFor: domain => appForPortal\(domain\)\.creds/)
+    expect(events).toMatch(/refresh: refreshWithCreds\(/)
+    expect(events).not.toMatch(/oauthCredsFromEnv/)
+  })
+})

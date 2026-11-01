@@ -1,5 +1,6 @@
 // GET /api/health — жив ли сервер и сконфигурирован ли он. Без секретов: только флаги «задано / нет».
 
+import { spyBoxState } from '../utils/b24Client'
 import { buildCommit } from '../utils/buildInfo'
 import { forwardedStatus } from '../utils/requestLimits'
 
@@ -13,7 +14,9 @@ export default defineEventHandler(event => ({
     tokenKey: Boolean(process.env.B24_TOKEN_ENC_KEY),
     // Без кода приложения сервер отказывает всем запросам из фрейма (503, server/utils/frameAuth.ts).
     appCode: Boolean(process.env.B24_APP_CODE?.trim()),
-    trustProxy: process.env.TRUST_PROXY === '1'
+    trustProxy: process.env.TRUST_PROXY === '1',
+    // Коробка-стенд шпиона (B24_SPY_BOX_APP): off / on / invalid — без значений.
+    spyBox: spyBoxState().state
   },
   // Как сервер видит адрес ЭТОГО запроса (requestLimits.ts → forwardedStatus): запросите health
   // через свой прокси — при TRUST_PROXY=1 здесь должно быть `used`.
