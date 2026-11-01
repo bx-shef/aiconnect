@@ -1,6 +1,6 @@
 # Срез проекта
 
-> Last reviewed: 2026-09-28
+> Last reviewed: 2026-11-01
 
 Что сделано, что дальше, что мешает. Обновляется при каждом мерже (`docs/AGENT_RULES.md` §4.3).
 План по этапам — `docs/PLAN.md`.
@@ -16,25 +16,24 @@
 | Что | Статус | Где | Тесты |
 |---|---|---|---|
 | Каркас: Nuxt 4 + b24ui + b24jssdk + Nitro, CI, dependabot, Docker | 🧪 (сборка — в CI) | `nuxt.config.ts`, `.github/` | гарды репо |
-| Выкат: `main` → GHCR → Watchtower → nginx-proxy, `aiconnect.bx-shef.by` | ✅ в шаблоне; сервер `aiconnect` не поднимался | `docker-compose.prod.yml`, `Makefile`, `.github/workflows/ci.yml` | гарды CI, `make` |
+| Выкат: `main` → GHCR → Watchtower → nginx-proxy, `aiconnect.bx-shef.by` | ✅ сервер поднят 2026-11-01 (`make doctor` за NAT — два ложных ✗) | `docker-compose.prod.yml`, `Makefile`, `.github/workflows/ci.yml` | гарды CI, `make` |
 | Процесс: правила, панель ревью, мерж, навыки | 🧪 | `docs/AGENT_RULES.md`, `.claude/` | штампы, CI |
-| Установка: права `ai_admin` + `user_brief`, события, снятие старых подписок | 🧪 | `app/pages/install.vue` | шаги (`app/utils/install.ts`) |
+| Установка: права `ai_admin` + `user_brief`, события, снятие старых подписок | ✅ локальным приложением на `b24-k82h1m.bitrix24.by` (2026-11-01); из кабинета — нужна подписка Маркет Плюс | `app/pages/install.vue` | шаги (`app/utils/install.ts`) |
 | Главная: что это; администратору — что не настроено на сервере и код приложения | 🧪 | `app/pages/app.vue` | разбор `/api/health` (`app/utils/serverHealth.ts`) |
 | Сервер: события установки со сверкой `member_id` и домена, шифрование токенов, SSRF-гард, CSP, проверка фрейм-токена, пределы запросов | ✅ в шаблоне | `server/` | да |
-| Шпион протокола: `completions_url` с подписью портала, запись запросов (`auth` без значений), error/тестовый callback только на хост портала, страница `/spy` | 🧪 | `server/utils/spy.ts`, `server/api/engine/`, `app/pages/spy.vue` | да: подпись, маскирование, SSRF-гард callback, план регистрации |
+| Шпион протокола: `completions_url` с подписью портала, запись запросов (`auth` без значений), error/тестовый callback только на хост портала, страница `/spy` | ✅ `b24-k82h1m.bitrix24.by`, чат и задачи (2026-11-01, замеры — `docs/PROTOCOL.md`, отчёт — bx-shef/aiconnect#19) | `server/utils/spy.ts`, `server/api/engine/`, `app/pages/spy.vue` | да: подпись, маскирование, SSRF-гард callback, план регистрации |
+| Полный журнал шпиона (`B24_SPY_FULL=1`): тела целиком, метки сценариев, выгрузка JSON | 🧪 | `server/utils/spyJournal.ts`, `server/api/spy/journal.get.ts`, `app/pages/spy.vue` | да: маскирование (`spyMask.ts`), ротация, метки, разбор запросов API, очередь (`keyLock`), мутации |
 | Смок: страж тестового портала, формы `profile`, `scope`, `ai.engine.list` | ✅ `b24-ypkv9c.bitrix24.by`, 3/3 (2026-09-28) | `smoke/`, `pnpm smoke` | окружение и страж — юнит-тесты |
 | `ai.engine.*` на тестовом портале: регистрация, список, снятие; повторный `register` с тем же `code` — ошибка | ✅ вебхуком (2026-09-28); из приложения — нет | `docs/RESEARCH.md`, «Замерено на тестовом портале» | — |
 
 ## Дальше
 
-1. **Закрыть этап 0** (bx-shef/aiconnect#6): код смержен (bx-shef/aiconnect#5), CI зелёный,
-   тестовый портал — `b24-ypkv9c.bitrix24.by`. Осталась установка владельцем: сервер
-   `aiconnect.bx-shef.by` и карточка приложения с правами `ai_admin`, `user_brief` и адресами
-   `/app`, `/install` (`docs/DEPLOY.md`). Вебхуком не проверить `event.bind` и `installFinish`.
-2. **Этап 1 — прогнать шпиона протокола**: после установки — страница `/spy`, «Зарегистрировать
-   все», сценарии портала из `docs/PROTOCOL.md`, итог — туда же. Нужны звонки от владельца
-   (короткий, 10+ минут, один по скрипту).
-3. Этапы 2–6 — `docs/PLAN.md`.
+1. **Разведка bx-shef/aiconnect#19**: включить `B24_SPY_FULL=1` на стенде, пройти сценарии с
+   метками (чат, задачи, CRM, звонки), выгрузить журнал, выжимку своими словами — для
+   bx-shef/toolsai-mcp#155. Агент в чате шлёт запросы стороннему движку — его инструкции видны.
+2. **Повторный прогон на портале `.ru`** по `docs/SPY_CHECK.md`.
+3. `call`, `vision`, `classify` в интерфейсе не нашлись — поиск по коду модулей на стенде.
+4. Этапы 2–6 — `docs/PLAN.md`.
 
 ## Унаследованные вопросы шаблона (issues были в `bx-shef/invoice-from-tasks`)
 
@@ -49,5 +48,5 @@ Issues в этом репозитории под них не заведены �
 
 ## Что мешает
 
-- Приложение `shef.aiconnect` ещё не установлено ни на один портал и сервер `aiconnect.bx-shef.by`
-  не поднят — без этого этап 0 не закрыть.
+- Установка из кабинета разработчика требует подписку Маркет Плюс (`SUBSCRIPTION_REQUIRED`) —
+  пока ставим локальным приложением.

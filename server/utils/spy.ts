@@ -6,6 +6,9 @@
 
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
 import { isAllowedPortalHost, parseSelfHostedHosts } from './b24Host'
+import { withKeyLock } from './keyLock'
+import { addJournalEntry, clearJournalData, getScenario, journalBody, setJournalCallback, spyFullEnabled } from './spyJournal'
+import { maskByKey } from './spyMask'
 import type { KeyValue } from './tokenStore'
 
 /** Categories accepted by `ai.engine.register` (docs; `vision` confirmed on the test portal). */
@@ -58,7 +61,9 @@ const MAX_KEYS = 100
  * up storage.
  */
 export function sanitizeForCapture(value: unknown, depth = 0, key = ''): unknown {
-  if (key === 'auth' && value !== null && value !== undefined) return maskAuth(value)
+  // Credentials and callback URLs (portal tokens in the query): shape or host only (spyMask.ts).
+  const masked = key ? maskByKey(key, value, MAX_DEPTH, MAX_KEYS, depth) : undefined
+  if (masked !== undefined) return masked
   if (typeof value === 'string') {
     return value.length > CAPTURE_STRING_LIMIT ? `${value.slice(0, CAPTURE_STRING_LIMIT)}… [${value.length} chars]` : value
   }
@@ -131,18 +136,6 @@ export async function engineGate(segment: string, category: string, method: stri
   return { ok: true, answer: 'read-body', memberId }
 }
 
-/** `auth` shape without secrets: every leaf becomes `<type:length>`, keys stay visible. */
-function maskAuth(value: unknown, depth = 0): unknown {
-  if (value === null || value === undefined) return value
-  if (typeof value === 'string') return `<string:${value.length}>`
-  if (typeof value !== 'object') return `<${typeof value}>`
-  if (depth >= MAX_DEPTH) return '[depth limit]'
-  if (Array.isArray(value)) return value.slice(0, MAX_KEYS).map(v => maskAuth(v, depth + 1))
-  const out: Record<string, unknown> = {}
-  for (const [k, v] of Object.entries(value as Record<string, unknown>).slice(0, MAX_KEYS)) out[k] = maskAuth(v, depth + 1)
-  return out
-}
-
 /** How the spy answers after 202: report an error (default) or send a fixed test answer. */
 export type SpyMode = 'error' | 'echo'
 export const isSpyMode = (v: unknown): v is SpyMode => v === 'error' || v === 'echo'
@@ -192,8 +185,15 @@ export interface Capture {
   bodyBytes: number
   contentType: string
   body: unknown
-  callback: { target: 'errorCallbackUrl' | 'callbackUrl' | 'none', host?: string, samePortal?: boolean, status?: number, error?: string }
+  /** Scenario label set on the spy page when the request came (`''` — none). */
+  scenario?: string
+  /** Id of the full-text record (only with B24_SPY_FULL=1, spyJournal.ts). */
+  journalId?: string
+  callback: CallbackOutcome
 }
+
+/** How the callback went — the same shape in the capture list and the journal. */
+export interface CallbackOutcome { target: 'errorCallbackUrl' | 'callbackUrl' | 'none', host?: string, samePortal?: boolean, status?: number, error?: string }
 
 const capturesKey = (memberId: string) => `spy:${memberId.toLowerCase()}`
 const modeKey = (memberId: string) => `spymode:${memberId.toLowerCase()}`
@@ -201,21 +201,9 @@ const modeKey = (memberId: string) => `spymode:${memberId.toLowerCase()}`
 /**
  * Per-portal serialization of read-modify-write on the capture list: without it a callback's
  * update, finishing after 202, could overwrite a capture added in between (finding of
- * /code-review). One process holds the store (docs/ARCHITECTURE.md), so an in-memory chain is enough.
+ * /code-review).
  */
-const locks = new Map<string, Promise<void>>()
-async function withLock(memberId: string, fn: () => Promise<void>): Promise<void> {
-  const key = memberId.toLowerCase()
-  const prev = locks.get(key) ?? Promise.resolve()
-  const next = prev.then(fn, fn)
-  const settled = next.catch(() => undefined)
-  locks.set(key, settled)
-  try {
-    await next
-  } finally {
-    if (locks.get(key) === settled) locks.delete(key)
-  }
-}
+const withLock = (memberId: string, fn: () => Promise<void>) => withKeyLock(`spy:${memberId.toLowerCase()}`, fn)
 
 export async function listCaptures(kv: KeyValue, memberId: string): Promise<Capture[]> {
   const value = await kv.getItem(capturesKey(memberId))
@@ -250,6 +238,7 @@ export async function clearCaptures(kv: KeyValue, memberId: string): Promise<voi
 export async function clearSpyData(kv: KeyValue, memberId: string): Promise<void> {
   await clearCaptures(kv, memberId)
   await kv.removeItem(modeKey(memberId))
+  await clearJournalData(kv, memberId)
 }
 
 export async function getSpyMode(kv: KeyValue, memberId: string): Promise<SpyMode> {
@@ -293,19 +282,39 @@ export async function handleEngineRequest(segment: string, category: string, raw
     parsed = undefined
   }
   const body = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null
+  const scenario = await getScenario(deps.kv, memberId)
+  const full = spyFullEnabled(deps.env)
   const capture: Capture = {
     id: randomUUID(),
     at: (deps.now?.() ?? new Date()).toISOString(),
     category,
+    scenario,
     keys: body ? Object.keys(body) : [],
     bodyBytes: Buffer.byteLength(raw),
     contentType,
     body: fitCaptureBudget(body ? sanitizeForCapture(body) : sanitizeForCapture(raw)),
     callback: { target: 'none' }
   }
+  // Not awaited before the 202 (Bitrix24 waits at most 5 s; a body can be megabytes). The
+  // callback outcome is recorded after it anyway: both go through one per-portal lock (keyLock).
+  if (full) {
+    capture.journalId = capture.id
+    void addJournalEntry(deps.kv, memberId, {
+      id: capture.id,
+      at: capture.at,
+      scenario,
+      category,
+      contentType,
+      size: capture.bodyBytes,
+      body: journalBody(parsed, raw),
+      callback: { target: 'none' }
+    }).catch((e) => {
+      deps.log?.(`[engine] ${memberId} journal write failed: ${(e as Error)?.message ?? e}`)
+    })
+  }
   await addCapture(deps.kv, memberId, capture)
   // Structure only: prompts and answers never go to the log (CLAUDE.md, secrets and texts).
-  deps.log?.(`[engine] ${memberId} ${category} ${capture.bodyBytes}B keys=${capture.keys.join(',')}`)
+  deps.log?.(`[engine] ${memberId} ${category} ${capture.bodyBytes}B keys=${capture.keys.join(',')}${scenario ? ` scenario=${scenario}` : ''}${full ? ' full' : ''}`)
   if (!body) return { status: 400, body: { error: 'JSON object expected' } }
 
   const mode = await getSpyMode(deps.kv, memberId)
@@ -330,6 +339,7 @@ export async function handleEngineRequest(segment: string, category: string, raw
         }
       }
       await updateCapture(deps.kv, memberId, capture)
+      if (capture.journalId) await setJournalCallback(deps.kv, memberId, capture.journalId, capture.callback)
     }
   }
 }
