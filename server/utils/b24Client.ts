@@ -6,7 +6,7 @@
 
 import { B24OAuth } from '@bitrix24/b24jssdk'
 import type { B24OAuthParams } from '@bitrix24/b24jssdk'
-import { assertPortalHost, DEFAULT_OAUTH_HOST } from './b24Host'
+import { assertPortalHost, DEFAULT_OAUTH_HOST, parseSelfHostedHosts } from './b24Host'
 import type { OAuthCreds } from './verifyInstallMember'
 
 /** Вызов REST-метода: результат (`result` конверта) или исключение с текстом ошибок портала. */
@@ -112,4 +112,31 @@ export function oauthCredsFromEnv(env: Record<string, string | undefined> = proc
     clientId: env.B24_CLIENT_ID?.trim() || '',
     clientSecret: env.B24_CLIENT_SECRET?.trim() || ''
   }
+}
+
+/** Реквизиты и код приложения для одного портала. */
+export interface PortalApp { creds: OAuthCreds, appCode: string }
+
+/**
+ * Отдельное локальное приложение на коробке-стенде шпиона (`B24_SPY_BOX_APP`:
+ * `<хост> <client_id> <client_secret> <код приложения>` через пробел). У локального приложения
+ * коробки свои реквизиты и код, у облачного — свои, а сервер один. Действует, только если хост
+ * есть и в `B24_SELFHOSTED_HOSTS`, и в `B24_SPY_PORTALS`: это наш стенд, клиентским коробкам
+ * приложение не ставится. Мусор в переменной — `null` (как будто не задана).
+ */
+export function spyBoxApp(env: Record<string, string | undefined> = process.env): (PortalApp & { host: string }) | null {
+  const parts = (env.B24_SPY_BOX_APP ?? '').trim().split(/\s+/)
+  if (parts.length !== 4) return null
+  const [rawHost, clientId, clientSecret, appCode] = parts as [string, string, string, string]
+  const host = rawHost.toLowerCase()
+  if (!parseSelfHostedHosts(env.B24_SELFHOSTED_HOSTS).has(host)) return null
+  if (!parseSelfHostedHosts(env.B24_SPY_PORTALS).has(host)) return null
+  return { host, creds: { clientId, clientSecret }, appCode }
+}
+
+/** Приложение для портала: коробка-стенд шпиона — её реквизиты, иначе — облачные из окружения. */
+export function appForPortal(domain: string, env: Record<string, string | undefined> = process.env): PortalApp {
+  const box = spyBoxApp(env)
+  if (box && box.host === domain.toLowerCase()) return { creds: box.creds, appCode: box.appCode }
+  return { creds: oauthCredsFromEnv(env), appCode: env.B24_APP_CODE?.trim() || '' }
 }

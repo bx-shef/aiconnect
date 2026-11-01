@@ -2,7 +2,7 @@
 // Решение принимает `handleB24Event` (server/utils/b24EventsHandler.ts, покрыт тестами); здесь —
 // только чтение тела и живые зависимости. Контракт — docs/B24_EVENTS.md.
 
-import { oauthCredsFromEnv } from '../../utils/b24Client'
+import { appForPortal } from '../../utils/b24Client'
 import { handleB24Event } from '../../utils/b24EventsHandler'
 import { SlidingWindow } from '../../utils/rateLimit'
 import { clientIp, portalStore } from '../../utils/requestContext'
@@ -12,14 +12,13 @@ import { rawOauthRefresh, type OAuthFetchFn } from '../../utils/verifyInstallMem
 const eventWindows = new SlidingWindow()
 
 export default defineEventHandler(async (event) => {
-  const creds = oauthCredsFromEnv()
   const ip = clientIp(event)
   try {
     const result = await handleB24Event((await readRawBody(event)) || '', {
       kv: portalStore(),
       envToken: process.env.B24_APPLICATION_TOKEN?.trim() || '',
-      creds,
-      refresh: rawOauthRefresh(globalThis.fetch as unknown as OAuthFetchFn, creds),
+      credsFor: domain => appForPortal(domain).creds,
+      refresh: (rt, host, creds) => rawOauthRefresh(globalThis.fetch as unknown as OAuthFetchFn, creds)(rt, host),
       allowEvent: () => eventWindows.take([[`ev:${ipBucketKey(ip)}`, EVENTS_PER_IP]]),
       allowVerification: () => eventWindows.take([['verify:*', OAUTH_VERIFY_GLOBAL]]),
       log: line => console.info(`[b24-events] ${line}`),

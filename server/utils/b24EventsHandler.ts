@@ -12,9 +12,10 @@ export interface EventDeps {
   kv: KeyValue
   /** `B24_APPLICATION_TOKEN` из окружения, `''` — не задан. */
   envToken: string
-  creds: OAuthCreds
-  /** Обновление refresh-токена на сервере авторизации `oauthHost` (verifyInstallMember.rawOauthRefresh). */
-  refresh: (refreshToken: string, oauthHost: string) => Promise<unknown>
+  /** Реквизиты приложения для домена установки (облачные или коробки-стенда шпиона — `appForPortal`). */
+  credsFor: (domain: string) => OAuthCreds
+  /** Обновление refresh-токена на сервере авторизации `oauthHost` реквизитами `creds` (verifyInstallMember.rawOauthRefresh). */
+  refresh: (refreshToken: string, oauthHost: string, creds: OAuthCreds) => Promise<unknown>
   /**
    * Лимит адреса отправителя: можно ли обработать событие установки или удаления; `false` — 429.
    * Спрашивается ТОЛЬКО для этих двух событий: прочие не стоят ничего, и раньше они выжигали
@@ -76,7 +77,8 @@ export async function handleB24Event(rawBody: string, deps: EventDeps): Promise<
 
   // ⚠ Fail-closed без реквизитов OAuth. Замер 2026-09-24 (docs/B24_EVENTS.md): без сверки
   // повторная «установка» с тем же member_id и ЧУЖИМИ токенами перезаписывала токены портала.
-  if (!deps.creds.clientId || !deps.creds.clientSecret) {
+  const creds = deps.credsFor(domain)
+  if (!creds.clientId || !creds.clientSecret) {
     warn('B24_CLIENT_ID/B24_CLIENT_SECRET not set — install NOT stored')
     return { status: 503, body: { error: 'server not configured' } }
   }
@@ -89,7 +91,7 @@ export async function handleB24Event(rawBody: string, deps: EventDeps): Promise<
     warn('install verification capacity exhausted — install NOT stored, portal must retry')
     return { status: 429, body: { error: 'too many install verifications' } }
   }
-  const bound = await verifyInstallMember(auth.memberId, domain, auth.refreshToken, rt => deps.refresh(rt, oauthHost))
+  const bound = await verifyInstallMember(auth.memberId, domain, auth.refreshToken, rt => deps.refresh(rt, oauthHost, creds))
   if (!bound.ok || !bound.grant) {
     warn(`install member_id=${auth.memberId} not verified (${bound.status ?? 503})`)
     return { status: bound.status ?? 503, body: { error: 'install member_id or domain not verified' } }

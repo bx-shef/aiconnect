@@ -41,7 +41,7 @@ function deps(over: Partial<EventDeps> = {}): TestDeps {
   return {
     kv: memoryKv(),
     envToken: '',
-    creds: { clientId: 'cid', clientSecret: 'csecret' },
+    credsFor: () => ({ clientId: 'cid', clientSecret: 'csecret' }),
     refresh: vi.fn(async () => realGrant),
     env: {},
     log: line => lines.push(line),
@@ -109,7 +109,7 @@ describe('установка (ONAPPINSTALL)', () => {
     const d = deps()
     const res = await handleB24Event(body('ONAPPINSTALL', installAuth), d)
     expect(res).toEqual({ status: 200, body: { ok: true } })
-    expect(d.refresh).toHaveBeenCalledWith('sent-refresh', 'oauth.bitrix24.tech')
+    expect(d.refresh).toHaveBeenCalledWith('sent-refresh', 'oauth.bitrix24.tech', { clientId: 'cid', clientSecret: 'csecret' })
     const saved = (await getPortalByDomain(d.kv, 'demo.bitrix24.ru'))!
     expect(accessTokenOf(saved)).toBe('rotated-access')
     expect(refreshTokenOf(saved)).toBe('rotated-refresh')
@@ -132,16 +132,23 @@ describe('установка (ONAPPINSTALL)', () => {
     expect(d.kv.data.size).toBe(0)
   })
 
+  it('реквизиты выбираются по домену установки из гарда (коробка-стенд шпиона — свои)', async () => {
+    const credsFor = vi.fn(() => ({ clientId: 'cid', clientSecret: 'csecret' }))
+    const d = deps({ credsFor })
+    await handleB24Event(body('ONAPPINSTALL', installAuth), d)
+    expect(credsFor).toHaveBeenCalledWith('demo.bitrix24.ru')
+  })
+
   it('задан только один из B24_CLIENT_ID/SECRET — тоже 503, а не попытка сверки', async () => {
     for (const creds of [{ clientId: 'cid', clientSecret: '' }, { clientId: '', clientSecret: 'cs' }]) {
-      const d = deps({ creds })
+      const d = deps({ credsFor: () => creds })
       expect((await handleB24Event(body('ONAPPINSTALL', installAuth), d)).status).toBe(503)
       expect(d.refresh).not.toHaveBeenCalled()
     }
   })
 
   it('без B24_CLIENT_ID/SECRET установка НЕ сохраняется — 503 (fail-closed), в журнал ошибок', async () => {
-    const d = deps({ creds: { clientId: '', clientSecret: '' } })
+    const d = deps({ credsFor: () => ({ clientId: '', clientSecret: '' }) })
     expect((await handleB24Event(body('ONAPPINSTALL', installAuth), d)).status).toBe(503)
     expect(d.refresh).not.toHaveBeenCalled()
     expect(d.kv.data.size).toBe(0)
@@ -151,7 +158,7 @@ describe('установка (ONAPPINSTALL)', () => {
   it('сервер авторизации — тот, что назвал портал, если он из списка; сохраняется с установкой', async () => {
     const d = deps()
     await handleB24Event(body('ONAPPINSTALL', { ...installAuth, server_endpoint: 'https://oauth.bitrix.info/rest/' }), d)
-    expect(d.refresh).toHaveBeenCalledWith('sent-refresh', 'oauth.bitrix.info')
+    expect(d.refresh).toHaveBeenCalledWith('sent-refresh', 'oauth.bitrix.info', expect.anything())
     expect((await getPortal(d.kv, 'm1'))?.oauthHost).toBe('oauth.bitrix.info')
   })
 
