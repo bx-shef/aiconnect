@@ -29,7 +29,8 @@ pnpm build && node .output/server/index.mjs
 
 Node.js 22+, pnpm 10 (версия — в `packageManager`). Публичный https-адрес для сервера.
 Облачный Битрикс24 (в коробке `ai.engine.register` недоступен). Права приложения в портале:
-`ai_admin`, `user_brief`; для тестовых звонков — `telephony`, `crm`.
+`ai_admin`, `user_brief`; для тестовых звонков — `telephony`, `crm`. Коробку-стенд шпиона —
+`docs/DEPLOY.md` §4.
 
 ## Команды
 

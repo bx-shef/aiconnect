@@ -1,6 +1,6 @@
 # Исходящие вызовы REST Битрикс24
 
-> Last reviewed: 2026-09-28
+> Last reviewed: 2026-11-01
 
 Реестр каждого метода, который зовёт приложение. Добавили вызов в код — добавьте строку сюда:
 `tests/repoGuards.test.ts` сверяет имена методов в `app/`, `server/`, `shared/` (строки кода и
@@ -23,13 +23,13 @@ b24jssdk. Из установленного приложения `shef.aiconnect
 
 ## Права приложения
 
-`ai_admin`, `user_brief` — решение владельца (`docs/PLAN.md`, этап 0), сверено с MCP 2026-09-28:
+`ai_admin`, `user_brief` — решение владельца (`docs/PLAN.md`); для тестовых звонков шпиона владелец добавил `telephony`, `crm` (2026-11-01, вызовы — только `scripts/spy-call.mjs` вебхуком), сверено с MCP 2026-09-28:
 
 - `ai_admin` — у `ai.engine.register`, `ai.engine.unregister`, `ai.engine.list` на странице
   метода «Scope: ai_admin»; метод только для администратора и только в облаке.
 - `user_brief` — «Пользователи (минимальный)», версия права `user` (статья «Доступные скоупы
   Битрикс24»); с ним доступен, например, `user.current` («Scope: user, user_brief, user_basic»).
-  Код этапа 0 методов `user.*` не зовёт.
+  Код методов `user.*` не зовёт.
 - `profile`, `scope`, `app.info` — «Scope: базовый» в документации. У `event.bind` / `event.get` /
   `event.unbind` страница MCP скоуп не называет; шаблон звал их без отдельного права — подтвердит
   установка на тестовый портал.
@@ -38,11 +38,10 @@ b24jssdk. Из установленного приложения `shef.aiconnect
 
 ## Провайдер BitrixGPT (право `ai_admin`)
 
-Сейчас зовёт только шпион протокола этапа 1 (`pages/spy.vue`, план вызовов — `app/utils/spy.ts`),
+Зовёт только шпион протокола (`pages/spy.vue`, план вызовов — `app/utils/spy.ts`),
 из фрейма, правами администратора: провайдер, зарегистрированный вебхуком, получает
 `app_code: null` и, значит, `auth: null` в запросах (замер, `docs/RESEARCH.md`). Коды шпиона —
-`sh_aiconnect_spy_<category>`, имя — `TEST <category>`; коды продукта `sh_aiconnect_<category>`
-появятся на этапе 3.
+`sh_aiconnect_spy_<category>`, имя — `TEST <category>`.
 
 | Метод | Транспорт | Файл | Назначение, грабли | Статус |
 |---|---|---|---|---|

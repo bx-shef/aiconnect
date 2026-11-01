@@ -50,7 +50,7 @@ pnpm build            # сборка сервера .output/server/index.mjs
 - **По Битрикс24 не гадаем — читаем.** REST — MCP `b24-dev-mcp` (подключён в `.mcp.json`);
   b24jssdk и b24ui — их `llms.txt` (навык `b24-docs`). Документация задаёт форму запроса, живой
   портал подтверждает результат. Протокол `ai.engine.register` — `docs/RESEARCH.md`, замеры —
-  `docs/PROTOCOL.md` (этап 1).
+  `docs/PROTOCOL.md`.
 - **Добавил REST-метод — строка в `docs/REST_METHODS.md`.** Иначе краснеет `tests/repoGuards.test.ts`.
 - **Чистые функции отдельно**, с тестами; REST и запись — тонким слоем поверх. Серверные модули
   с автоимпортами Nitro (`useStorage`, `createError`) — только в обработчиках, `server/middleware/`
