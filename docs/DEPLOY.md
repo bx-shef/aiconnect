@@ -225,7 +225,8 @@ make build-local                   # локальная проверка: то �
 | `B24_SPY_PORTALS` | порталы, где работает шпион протокола, через запятую | шпион выключен везде: страница говорит «выключен», `completions_url` шпиона — `404` |
 | `B24_SPY_FULL` | `1` — полный журнал шпиона для порталов из `B24_SPY_PORTALS`: тела запросов целиком (до 500 запросов и 50 МБ на портал), выгрузка JSON; только на своём стенде | строки обрезаны до 500 знаков, журнала и выгрузки нет |
 | `B24_APPLICATION_TOKEN` | фиксированный `application_token`; для приложения из Маркета — **пустой** (у каждого портала свой) | первый `ONAPPINSTALL` задаёт токен портала |
-| `B24_SELFHOSTED_HOSTS` | коробочные порталы вне `*.bitrix24.*` для SSRF-гарда | к ним сервер не пойдёт; ⚠ установка из коробки всё равно не сохраняется — приложение облачное (`docs/B24_EVENTS.md`) |
+| `B24_SELFHOSTED_HOSTS` | коробочные порталы вне `*.bitrix24.*` для SSRF-гарда | к ним сервер не пойдёт |
+| `B24_SPY_BOX_APP` | коробка-стенд шпиона: `<хост> <client_id> <client_secret> <код приложения>` её локального приложения, через пробел, в значениях пробелов нет; хост — и в `B24_SELFHOSTED_HOSTS`, и в `B24_SPY_PORTALS` | с коробки установка не проходит сверку; задана с ошибкой — для её хоста `503`, `spyBox: invalid` в health и `[spy-box]` в `make logs` |
 
 ⚠ **Копия `B24_TOKEN_ENC_KEY` — вне сервера** (менеджер паролей, хранилище секретов). Потеря или
 смена ключа делает сохранённые токены нечитаемыми: сервер перестанет узнавать порталы до
@@ -334,6 +335,39 @@ HTTPS обычно даёт обратный прокси перед конте�
    `client_max_body_size 16m;` в тот же файл `vhost.d/<домен>_location`, что и таймаут
    (`make proxy-timeout` его создаёт), и перезагрузите прокси.
 4. После прогона — «Снять все».
+
+### Коробка-стенд (bx-shef/toolsai-stand)
+
+На стенде ещё не проверено — первый прогон покажет.
+
+1. Стенд виден снаружи по https (`./stand.sh public`, адрес CloudPub) и зарегистрирован в облаке
+   Битрикс24 (OAuth коробки идёт через `oauth.bitrix.info`).
+2. На стенде — локальное приложение («Разработчикам» → «Другое» → «Локальное приложение»): путь
+   обработчика `https://aiconnect.bx-shef.by/app`, установки — `/install`, права `ai_admin`,
+   `user_brief`, `telephony`, `crm`. Код приложения (`local.…`), `client_id` и `client_secret` — в
+   `.env` сервера одной строкой: `B24_SPY_BOX_APP=<хост стенда> <client_id> <client_secret> <код>`;
+   хост стенда (без схемы и порта) — в `B24_SELFHOSTED_HOSTS` и в `B24_SPY_PORTALS`. Затем
+   `make prod-up`; в `make health` — `spyBox: on` (`invalid` — причина в `make logs`, строка
+   `[spy-box]`), и установка. Сервер у нас один, он же боевой: после прогонов строку
+   `B24_SPY_BOX_APP` и хост стенда из обоих списков убрать, `make prod-up`.
+3. Движки: на коробке нет REST `ai.engine.register`, кнопка «Зарегистрировать все» не сработает.
+   Адреса — на странице шпиона, «Адреса completions_url» (не публиковать: по адресу можно слать
+   запросы в шпион этого портала); регистрация — в контейнере стенда. Имя сервиса `portal` и
+   корень `/var/www/html` — из bx-shef/toolsai-stand (`docker-compose.yml`):
+   ```bash
+   docker compose exec portal php -r '
+     $_SERVER["DOCUMENT_ROOT"] = "/var/www/html";
+     require "/var/www/html/bitrix/modules/main/include/prolog_before.php";
+     \Bitrix\Main\Loader::includeModule("ai");
+     foreach (["text" => "<адрес text>", "audio" => "<адрес audio>"] as $c => $url) {
+       var_dump(\Bitrix\AI\ThirdParty\Manager::register(["name" => "TEST $c", "code" => "sh_aiconnect_spy_$c", "category" => $c, "completions_url" => $url, "settings" => []]));
+     }'
+   ```
+   Остальные категории — так же. Снять — `Manager::unRegister(["code" => "sh_aiconnect_spy_<категория>"])`.
+   Так же движки регистрирует `shef.toolsai` (`lib/engine/registrar.php`). На коробке audio-движок
+   виден CRM только при зарегистрированном text-движке (`ThirdParty::hasQuality()`).
+   Таблица «Провайдеры» на коробке покажет ошибку `ai.engine.list` (того REST там тоже нет) —
+   пойманные запросы, журнал и выгрузка работают.
 
 ## Смена адреса сервера
 
