@@ -7,7 +7,7 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
 import { isAllowedPortalHost, parseSelfHostedHosts } from './b24Host'
 import { withKeyLock } from './keyLock'
-import { addJournalEntry, clearJournalData, getScenario, maskForJournal, setJournalCallback, spyFullEnabled } from './spyJournal'
+import { addJournalEntry, clearJournalData, getScenario, journalBody, maskUrl, setJournalCallback, spyFullEnabled } from './spyJournal'
 import type { KeyValue } from './tokenStore'
 
 /** Categories accepted by `ai.engine.register` (docs; `vision` confirmed on the test portal). */
@@ -60,6 +60,8 @@ const MAX_KEYS = 100
  * up storage.
  */
 export function sanitizeForCapture(value: unknown, depth = 0, key = ''): unknown {
+  // Callback URLs carry portal tokens: only the host is kept (finding of /code-review).
+  if (key === 'callbackUrl' || key === 'errorCallbackUrl') return maskUrl(value)
   if (key === 'auth' && value !== null && value !== undefined) return maskAuth(value)
   if (typeof value === 'string') {
     return value.length > CAPTURE_STRING_LIMIT ? `${value.slice(0, CAPTURE_STRING_LIMIT)}… [${value.length} chars]` : value
@@ -301,17 +303,21 @@ export async function handleEngineRequest(segment: string, category: string, raw
     body: fitCaptureBudget(body ? sanitizeForCapture(body) : sanitizeForCapture(raw)),
     callback: { target: 'none' }
   }
+  // Not awaited before the 202 (Bitrix24 waits at most 5 s; a body can be megabytes). The
+  // callback outcome is recorded after it anyway: both go through one per-portal lock (keyLock).
   if (full) {
     capture.journalId = capture.id
-    await addJournalEntry(deps.kv, memberId, {
+    void addJournalEntry(deps.kv, memberId, {
       id: capture.id,
       at: capture.at,
       scenario,
       category,
       contentType,
       size: capture.bodyBytes,
-      body: maskForJournal(body ?? raw),
-      callback: capture.callback
+      body: journalBody(parsed, raw),
+      callback: { target: 'none' }
+    }).catch((e) => {
+      deps.log?.(`[engine] ${memberId} journal write failed: ${(e as Error)?.message ?? e}`)
     })
   }
   await addCapture(deps.kv, memberId, capture)

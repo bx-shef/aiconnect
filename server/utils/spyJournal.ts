@@ -24,14 +24,14 @@ export function spyFullEnabled(spyOn: boolean, env: Record<string, string | unde
   return spyOn && env.B24_SPY_FULL?.trim() === '1'
 }
 
-/** Scenario label: latin letters, digits, `.`, `_`, `-`, up to 64 chars. */
+/** Scenario label: latin letters (stored lowercase), digits, `.`, `_`, `-`, up to 64 chars. */
 const SCENARIO_RE = /^[\w.-]{1,64}$/
 
 /** Empty → no label (`''`); a valid label → itself; anything else → `null` (refuse). */
 export function parseScenario(value: unknown): string | null {
   if (value === undefined || value === null) return ''
   if (typeof value !== 'string') return null
-  const v = value.trim()
+  const v = value.trim().toLowerCase()
   if (!v) return ''
   return SCENARIO_RE.test(v) ? v : null
 }
@@ -47,7 +47,8 @@ function maskShape(value: unknown, depth: number): unknown {
   return out
 }
 
-function maskUrl(value: unknown): unknown {
+/** Callback URL → its host only: the query carries portal tokens. */
+export function maskUrl(value: unknown): unknown {
   if (typeof value !== 'string') return maskShape(value, 0)
   try {
     return `<url:${new URL(value).host}>`
@@ -71,6 +72,19 @@ export function maskForJournal(value: unknown, depth = 0, key = ''): unknown {
   for (const [k, v] of entries.slice(0, JOURNAL_MAX_KEYS)) out[k] = maskForJournal(v, depth + 1, k)
   if (entries.length > JOURNAL_MAX_KEYS) out['[more keys]'] = entries.length - JOURNAL_MAX_KEYS
   return out
+}
+
+/** Form-encoded secrets (`auth[...]`, callback URLs) in a raw body → `<masked:length>`. */
+const RAW_SECRET_RE = /(^|[&\s;])((?:auth(?:%5B|\[)[^=&]*|auth|callbackUrl|errorCallbackUrl)=)([^&\s;]*)/gi
+
+/**
+ * Journal body: a parsed JSON value goes through {@link maskForJournal}; a raw body (form data,
+ * anything else) keeps its text with form-encoded secrets masked. Multipart parts named `auth…`
+ * are not parsed — the spy has not seen such a body yet (docs/PROTOCOL.md).
+ */
+export function journalBody(parsed: unknown, raw: string): unknown {
+  if (parsed !== undefined && parsed !== null && typeof parsed === 'object') return maskForJournal(parsed)
+  return raw.replace(RAW_SECRET_RE, (_m, pre: string, name: string, val: string) => `${pre}${name}<masked:${val.length}>`)
 }
 
 /** One journal record: the request as received (masked), with its scenario and callback outcome. */

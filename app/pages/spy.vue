@@ -94,12 +94,13 @@ const showFull = (id: string) => run(async () => {
 const downloadJournal = () => run(async () => {
   const q = exportScenario.value ? `?scenario=${encodeURIComponent(exportScenario.value)}` : ''
   const data = await api.get<unknown>(`/api/spy/journal${q}`)
-  const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }))
+  const url = URL.createObjectURL(new Blob([JSON.stringify(data)], { type: 'application/json' }))
   const a = document.createElement('a')
   a.href = url
   a.download = `spy-journal${exportScenario.value ? `-${exportScenario.value}` : ''}.json`
   a.click()
-  URL.revokeObjectURL(url)
+  // Some browsers start the download after click() returns: revoke later, not at once.
+  setTimeout(() => URL.revokeObjectURL(url), 60_000)
 })
 
 onMounted(async () => {

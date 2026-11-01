@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import { handleEngineRequest, listCaptures, portalSegment, type HandleDeps } from '../../server/utils/spy'
 import {
-  addJournalEntry, clearJournal, exportJournal, getJournalEntry, getScenario, journalSummary, maskForJournal, parseScenario, rotate,
+  addJournalEntry, clearJournal, journalBody, exportJournal, getJournalEntry, getScenario, journalSummary, maskForJournal, parseScenario, rotate,
   setJournalCallback, setScenario, spyFullEnabled, type JournalEntry
 } from '../../server/utils/spyJournal'
 import { removePortal, type KeyValue } from '../../server/utils/tokenStore'
@@ -42,6 +42,7 @@ describe('parseScenario', () => {
     expect(parseScenario(undefined)).toBe('')
     expect(parseScenario('  ')).toBe('')
     expect(parseScenario(' chat.deal-stage_1 ')).toBe('chat.deal-stage_1')
+    expect(parseScenario('Chat.Deal')).toBe('chat.deal')
     expect(parseScenario('a'.repeat(64))).toBe('a'.repeat(64))
   })
 
@@ -76,6 +77,21 @@ describe('maskForJournal', () => {
 
   it('a raw non-JSON body is kept as is', () => {
     expect(maskForJournal('prompt=x')).toBe('prompt=x')
+  })
+})
+
+describe('journalBody', () => {
+  it('a parsed JSON value of any shape is masked, a top-level array too', () => {
+    expect(journalBody([{ auth: { access_token: 'secret' } }], '')).toEqual([{ auth: { access_token: '<string:6>' } }])
+  })
+
+  it('a form-encoded body keeps its text, auth and callback values masked', () => {
+    const raw = 'prompt=hello&auth%5Baccess_token%5D=secret1&auth[member_id]=secret2&callbackUrl=https%3A%2F%2Fx%3Ft%3Dsecret3&errorCallbackUrl=secret4&ttl=1'
+    const out = journalBody(undefined, raw) as string
+    expect(out).toContain('prompt=hello')
+    expect(out).toContain('ttl=1')
+    expect(out).toContain('auth%5Baccess_token%5D=<masked:7>')
+    expect(out).not.toMatch(/secret/)
   })
 })
 
@@ -185,6 +201,23 @@ describe('handleEngineRequest with the journal', () => {
     const line = log.mock.calls[0]![0] as string
     expect(line).toContain('scenario=chat.deal-stage')
     expect(line).not.toContain('BitrixGPT')
+  })
+
+  it('full mode, form body: answered 400, journal keeps the text with secrets masked', async () => {
+    const { kv, d } = deps({ B24_SPY_FULL: '1' })
+    const v = await handleEngineRequest(seg(), 'audio', 'prompt=x&auth[access_token]=tok-secret', 'application/x-www-form-urlencoded', d)
+    expect(v.status).toBe(400)
+    await vi.waitFor(async () => expect(await exportJournal(kv, MEMBER)).toHaveLength(1))
+    const [rec] = await exportJournal(kv, MEMBER)
+    expect(rec!.body).toBe('prompt=x&auth[access_token]=<masked:10>')
+  })
+
+  it('the short capture keeps only the host of callback URLs', async () => {
+    const { kv, d } = deps({})
+    await handleEngineRequest(seg(), 'text', body(), 'application/json', d)
+    const [capture] = await listCaptures(kv, MEMBER)
+    expect((capture!.body as Record<string, unknown>).callbackUrl).toBe(`<url:${DOMAIN}>`)
+    expect(JSON.stringify(capture)).not.toMatch(/secret/)
   })
 
   it('without B24_SPY_FULL: no journal, the short capture still gets the scenario', async () => {
