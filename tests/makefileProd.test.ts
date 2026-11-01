@@ -651,6 +651,14 @@ describe('make doctor', () => {
 })
 
 // ─── make compose-update ──────────────────────────────────────────────
+describe('make backup', () => {
+  it('полный журнал шпиона в копию не идёт (тексты запросов открытым текстом)', () => {
+    const r = make('backup', { args: ['-n'] })
+    expect(r.out).toContain('--exclude=./portals/spyjrec')
+    expect(r.out).toContain('--exclude=./portals/spyjindex')
+  })
+})
+
 describe('make compose-update', () => {
   const OLD = 'services:\n  app:\n    image: ghcr.io/bx-shef/aiconnect:latest\n'
   const NEW = `${OLD}    labels:\n      - "com.github.nginx-proxy.nginx-proxy.keepalive=disabled"\n`

@@ -189,9 +189,11 @@ doctor:
 ## Копия тома с токенами установки в ./backups (токены в нём зашифрованы B24_TOKEN_ENC_KEY)
 #
 # Без ключа копия бесполезна, ключ — отдельно и вне сервера. Восстановление — docs/DEPLOY.md.
+# Полный журнал шпиона (spyjrec, spyjindex) в копию не идёт: в нём тексты запросов открытым
+# текстом, а восстанавливать его незачем (решение владельца, bx-shef/aiconnect#22).
 backup:
 	@mkdir -p backups && f="backups/portals-$$(date +%Y%m%d-%H%M%S).tgz" \
-	  && { $(COMPOSE) exec -T app tar czf - -C /app/.data . > "$$f" || { rm -f "$$f"; exit 1; }; } \
+	  && { $(COMPOSE) exec -T app tar czf - --exclude=./portals/spyjrec --exclude=./portals/spyjindex -C /app/.data . > "$$f" || { rm -f "$$f"; exit 1; }; } \
 	  && echo "[make] копия: $$f ($$(du -h "$$f" | cut -f1))"
 
 ## Поднять таймаут общего nginx-proxy для нашего домена (по умолчанию он ждёт 60 с)
