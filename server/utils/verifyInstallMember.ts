@@ -60,6 +60,11 @@ export function rawOauthRefresh(fetchFn: OAuthFetchFn, creds: OAuthCreds, timeou
   }
 }
 
+/** Обновление refresh-токена реквизитами конкретного приложения (облачного или коробки-стенда). */
+export function refreshWithCreds(fetchFn: OAuthFetchFn, timeoutMs = INSTALL_VERIFY_TIMEOUT_MS) {
+  return (refreshToken: string, oauthHost: string, creds: OAuthCreds): Promise<unknown> => rawOauthRefresh(fetchFn, creds, timeoutMs)(refreshToken, oauthHost)
+}
+
 export interface RefreshedGrant {
   accessToken: string
   refreshToken: string

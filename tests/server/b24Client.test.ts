@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { oauthCredsFromEnv, oauthParams, restCallFrom, type SdkCallClient } from '../../server/utils/b24Client'
+import { appForPortal, oauthCredsFromEnv, spyBoxApp, spyBoxState, oauthParams, restCallFrom, type SdkCallClient } from '../../server/utils/b24Client'
 
 const token = { domain: 'https://Demo.bitrix24.ru/', memberId: 'm1', accessToken: 'a', refreshToken: 'r', expiresAt: 10_000_000, applicationToken: 't' }
 
@@ -49,5 +49,49 @@ describe('restCallFrom', () => {
 describe('oauthCredsFromEnv', () => {
   it('обрезает пробелы; нет значения — пустая строка', () => {
     expect(oauthCredsFromEnv({ B24_CLIENT_ID: ' id ', B24_CLIENT_SECRET: undefined })).toEqual({ clientId: 'id', clientSecret: '' })
+  })
+})
+
+describe('spyBoxApp / appForPortal (коробка-стенд шпиона)', () => {
+  const BOX = 'stand.example.by'
+  const env = (over: Record<string, string> = {}) => ({
+    B24_CLIENT_ID: 'cloud-id', B24_CLIENT_SECRET: 'cloud-secret', B24_APP_CODE: 'local.cloud',
+    B24_SPY_BOX_APP: `${BOX} box-id box-secret local.box`,
+    B24_SELFHOSTED_HOSTS: BOX, B24_SPY_PORTALS: `b24-x.bitrix24.by, ${BOX}`,
+    ...over
+  })
+
+  it('коробка из обоих списков — её реквизиты и код; облако — облачные', () => {
+    expect(appForPortal('Stand.Example.BY', env())).toEqual({ creds: { clientId: 'box-id', clientSecret: 'box-secret' }, appCode: 'local.box' })
+    expect(appForPortal('b24-x.bitrix24.by', env())).toEqual({ creds: { clientId: 'cloud-id', clientSecret: 'cloud-secret' }, appCode: 'local.cloud' })
+  })
+
+  it('хоста нет в B24_SELFHOSTED_HOSTS или в B24_SPY_PORTALS — реквизиты коробки не действуют', () => {
+    expect(spyBoxApp(env({ B24_SELFHOSTED_HOSTS: '' }))).toBeNull()
+    expect(spyBoxApp(env({ B24_SPY_PORTALS: 'b24-x.bitrix24.by' }))).toBeNull()
+    expect(spyBoxState(env({ B24_SPY_PORTALS: '' }))).toMatchObject({ state: 'invalid', reason: 'host not in B24_SPY_PORTALS' })
+  })
+
+  it('мусор в B24_SPY_BOX_APP — не действует и помечен как ошибка (без значений)', () => {
+    expect(spyBoxState(env({ B24_SPY_BOX_APP: '' }))).toEqual({ state: 'off' })
+    for (const v of [BOX, `${BOX} id secret`, `${BOX} id secret code extra`]) {
+      expect(spyBoxApp(env({ B24_SPY_BOX_APP: v }))).toBeNull()
+      const st = spyBoxState(env({ B24_SPY_BOX_APP: v }))
+      expect(st).toMatchObject({ state: 'invalid', host: BOX })
+      expect(JSON.stringify(st)).not.toMatch(/secret/)
+    }
+  })
+
+  it('хост со схемой и портом приводится как в списках', () => {
+    expect(spyBoxApp(env({ B24_SPY_BOX_APP: `https://${BOX.toUpperCase()}:443 box-id box-secret local.box` }))?.host).toBe(BOX)
+    expect(appForPortal(`${BOX}:443`, env()).creds.clientId).toBe('box-id')
+  })
+
+  it('задана с ошибкой — для хоста стенда пустые реквизиты, а не облачные; облако — как было', () => {
+    const bad = env({ B24_SPY_BOX_APP: `${BOX} box-id box-secret` })
+    expect(appForPortal(BOX, bad)).toEqual({ creds: { clientId: '', clientSecret: '' }, appCode: '' })
+    expect(appForPortal('b24-x.bitrix24.by', bad).creds.clientId).toBe('cloud-id')
+    const notListed = env({ B24_SPY_PORTALS: 'b24-x.bitrix24.by' })
+    expect(appForPortal(BOX, notListed).creds.clientId).toBe('')
   })
 })

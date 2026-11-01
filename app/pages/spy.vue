@@ -194,6 +194,25 @@ onMounted(async () => {
               </tr>
             </tbody>
           </table>
+          <details
+            class="mt-2 text-xs"
+            data-testid="spy-urls"
+          >
+            <summary class="cursor-pointer">
+              Адреса completions_url (коробка: регистрация из PHP)
+            </summary>
+            <p class="mt-1">
+              На коробке нет REST ai.engine.register: движки регистрирует
+              \Bitrix\AI\ThirdParty\Manager::register() с этими адресами (docs/DEPLOY.md §4).
+            </p>
+            <p
+              v-for="engine in state.engines"
+              :key="`url-${engine.code}`"
+              class="font-mono break-all"
+            >
+              {{ engine.category }}: {{ engine.completionsUrl }}
+            </p>
+          </details>
           <div class="flex flex-wrap gap-2 mt-3">
             <B24Button
               color="air-primary"

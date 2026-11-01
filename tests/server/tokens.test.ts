@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { decryptSecret, encryptSecret, loadEncKey } from '../../server/utils/secretCrypto'
 import { accessTokenOf, getPortal, getPortalByDomain, refreshTokenOf, removePortal, saveInstall, updateTokens, type KeyValue } from '../../server/utils/tokenStore'
-import { endpointHost, rawOauthRefresh, verifyInstallMember } from '../../server/utils/verifyInstallMember'
+import { endpointHost, rawOauthRefresh, refreshWithCreds, verifyInstallMember } from '../../server/utils/verifyInstallMember'
 
 function memoryKv(): KeyValue & { data: Map<string, unknown> } {
   const data = new Map<string, unknown>()
@@ -198,6 +198,13 @@ describe('запрос продления токена', () => {
     expect(Object.fromEntries(new URLSearchParams(init.body))).toEqual({
       grant_type: 'refresh_token', client_id: 'cid', client_secret: 'csecret', refresh_token: 'rt-1'
     })
+  })
+
+  it('refreshWithCreds шлёт переданные реквизиты (облачные или коробки-стенда)', async () => {
+    const fetchFn = vi.fn(async () => ({ json: async () => ({ ok: 1 }) }))
+    await refreshWithCreds(fetchFn)('rt-2', 'oauth.bitrix.info', { clientId: 'box-id', clientSecret: 'box-secret' })
+    const [, init] = fetchFn.mock.calls[0] as unknown as [string, { body: string }]
+    expect(Object.fromEntries(new URLSearchParams(init.body))).toMatchObject({ client_id: 'box-id', client_secret: 'box-secret', refresh_token: 'rt-2' })
   })
 
   it('хост с путём, портом или userinfo — отказ до запроса', async () => {

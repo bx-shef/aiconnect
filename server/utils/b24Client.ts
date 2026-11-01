@@ -6,7 +6,7 @@
 
 import { B24OAuth } from '@bitrix24/b24jssdk'
 import type { B24OAuthParams } from '@bitrix24/b24jssdk'
-import { assertPortalHost, DEFAULT_OAUTH_HOST } from './b24Host'
+import { assertPortalHost, DEFAULT_OAUTH_HOST, parseSelfHostedHosts, portalHostname } from './b24Host'
 import type { OAuthCreds } from './verifyInstallMember'
 
 /** Вызов REST-метода: результат (`result` конверта) или исключение с текстом ошибок портала. */
@@ -112,4 +112,53 @@ export function oauthCredsFromEnv(env: Record<string, string | undefined> = proc
     clientId: env.B24_CLIENT_ID?.trim() || '',
     clientSecret: env.B24_CLIENT_SECRET?.trim() || ''
   }
+}
+
+/** Реквизиты и код приложения для одного портала. */
+export interface PortalApp { creds: OAuthCreds, appCode: string }
+
+/** Коробка-стенд шпиона из `B24_SPY_BOX_APP`. */
+export interface SpyBoxApp extends PortalApp { host: string }
+
+/** Состояние `B24_SPY_BOX_APP`: не задана, действует или задана с ошибкой (что не так — без значений). */
+export type SpyBoxState = { state: 'off' } | { state: 'on', app: SpyBoxApp } | { state: 'invalid', host: string, reason: string }
+
+/**
+ * Отдельное локальное приложение на коробке-стенде шпиона (`B24_SPY_BOX_APP`:
+ * `<хост> <client_id> <client_secret> <код приложения>` через пробел, в значениях пробелов нет).
+ * У локального приложения коробки свои реквизиты и код, у облачного — свои, а сервер один.
+ * Действует, только если хост есть и в `B24_SELFHOSTED_HOSTS`, и в `B24_SPY_PORTALS`: это наш
+ * стенд, клиентским коробкам приложение не ставится. Хост приводится как в списках
+ * (`portalHostname`: без схемы, порта, в нижнем регистре).
+ */
+export function spyBoxState(env: Record<string, string | undefined> = process.env): SpyBoxState {
+  const raw = (env.B24_SPY_BOX_APP ?? '').trim()
+  if (!raw) return { state: 'off' }
+  const parts = raw.split(/\s+/)
+  const host = portalHostname(parts[0] ?? '')
+  if (parts.length !== 4) return { state: 'invalid', host, reason: `expected 4 fields, got ${parts.length}` }
+  if (!host) return { state: 'invalid', host, reason: 'host is not a hostname' }
+  if (!parseSelfHostedHosts(env.B24_SELFHOSTED_HOSTS).has(host)) return { state: 'invalid', host, reason: 'host not in B24_SELFHOSTED_HOSTS' }
+  if (!parseSelfHostedHosts(env.B24_SPY_PORTALS).has(host)) return { state: 'invalid', host, reason: 'host not in B24_SPY_PORTALS' }
+  const [, clientId, clientSecret, appCode] = parts as [string, string, string, string]
+  return { state: 'on', app: { host, creds: { clientId, clientSecret }, appCode } }
+}
+
+/** Коробка-стенд, если `B24_SPY_BOX_APP` задана верно; иначе `null`. */
+export function spyBoxApp(env: Record<string, string | undefined> = process.env): SpyBoxApp | null {
+  const s = spyBoxState(env)
+  return s.state === 'on' ? s.app : null
+}
+
+/**
+ * Приложение для портала: коробка-стенд шпиона — её реквизиты, иначе — облачные из окружения.
+ * ⚠ `B24_SPY_BOX_APP` задана с ошибкой — для её хоста пустые реквизиты (установка 503, фрейм
+ * 503), а не облачные: иначе облачный секрет ушёл бы на сверку чужого гранта (находка панели).
+ */
+export function appForPortal(domain: string, env: Record<string, string | undefined> = process.env): PortalApp {
+  const box = spyBoxState(env)
+  const host = portalHostname(domain)
+  if (box.state === 'on' && box.app.host === host) return { creds: box.app.creds, appCode: box.app.appCode }
+  if (box.state === 'invalid' && box.host && box.host === host) return { creds: { clientId: '', clientSecret: '' }, appCode: '' }
+  return { creds: oauthCredsFromEnv(env), appCode: env.B24_APP_CODE?.trim() || '' }
 }
