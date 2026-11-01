@@ -49,6 +49,8 @@ async function load(keepError = false): Promise<void> {
   try {
     state.value = await api.get<SpyState>('/api/spy')
     scenarioInput.value = state.value.scenario ?? ''
+    // A label that is no longer in the journal would export an empty list.
+    if (exportScenario.value && !state.value.journal?.scenarios.includes(exportScenario.value)) exportScenario.value = ''
     if (state.value.enabled) registered.value = parseEngineList(await b24.call('ai.engine.list'))
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)

@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import { handleEngineRequest, listCaptures, portalSegment, type HandleDeps } from '../../server/utils/spy'
 import {
-  addJournalEntry, clearJournal, journalBody, exportJournal, getJournalEntry, getScenario, journalSummary, maskForJournal, parseScenario, rotate,
+  addJournalEntry, clearJournal, journalBody, JOURNAL_MAX_BODY_BYTES, parseJournalQuery, parseSpyPost, exportJournal, getJournalEntry, getScenario, journalSummary, maskForJournal, parseScenario, rotate,
   setJournalCallback, setScenario, spyFullEnabled, type JournalEntry
 } from '../../server/utils/spyJournal'
 import { removePortal, type KeyValue } from '../../server/utils/tokenStore'
@@ -27,13 +27,19 @@ const entry = (id: string, over: Partial<JournalEntry> = {}): JournalEntry => ({
 })
 
 describe('spyFullEnabled', () => {
-  it('only with B24_SPY_FULL=1 and only on a spy portal', () => {
-    expect(spyFullEnabled(true, { B24_SPY_FULL: '1' })).toBe(true)
-    expect(spyFullEnabled(true, { B24_SPY_FULL: ' 1 ' })).toBe(true)
-    expect(spyFullEnabled(false, { B24_SPY_FULL: '1' })).toBe(false)
-    expect(spyFullEnabled(true, {})).toBe(false)
-    expect(spyFullEnabled(true, { B24_SPY_FULL: 'true' })).toBe(false)
-    expect(spyFullEnabled(true, { B24_SPY_FULL: '0' })).toBe(false)
+  it('only with B24_SPY_FULL=1', () => {
+    expect(spyFullEnabled({ B24_SPY_FULL: '1' })).toBe(true)
+    expect(spyFullEnabled({ B24_SPY_FULL: ' 1 ' })).toBe(true)
+    expect(spyFullEnabled({})).toBe(false)
+    expect(spyFullEnabled({ B24_SPY_FULL: 'true' })).toBe(false)
+    expect(spyFullEnabled({ B24_SPY_FULL: '0' })).toBe(false)
+  })
+
+  it('a portal outside B24_SPY_PORTALS gets no journal even with B24_SPY_FULL=1 (404, nothing stored)', async () => {
+    const kv = memoryKv()
+    const d = { kv, encKey: KEY, getPortalDomain: async () => DOMAIN, postJson: vi.fn(), env: { B24_SPY_FULL: '1', B24_SPY_PORTALS: 'other.bitrix24.by' } } as unknown as HandleDeps
+    expect((await handleEngineRequest(portalSegment(MEMBER, KEY), 'text', '{"prompt":"x"}', 'application/json', d)).status).toBe(404)
+    expect(kv.data.size).toBe(0)
   })
 })
 
@@ -75,14 +81,32 @@ describe('maskForJournal', () => {
     expect(JSON.stringify(out)).not.toContain('secret')
   })
 
-  it('a raw non-JSON body is kept as is', () => {
-    expect(maskForJournal('prompt=x')).toBe('prompt=x')
+  it('credential-looking keys anywhere are masked; max_tokens and the like are not', () => {
+    const out = maskForJournal({ Auth: 'a1', access_token: 'secret-1', nested: { refresh_token: 'secret-2', client_secret: 'secret-3' }, error_callback_url: 'https://h.by/?t=secret-4', max_tokens: 1500, promptCategory: 'tasks' }) as Record<string, unknown>
+    expect(JSON.stringify(out)).not.toMatch(/secret-|a1/)
+    expect(out.max_tokens).toBe(1500)
+    expect(out.promptCategory).toBe('tasks')
+    expect(out.error_callback_url).toBe('<url:h.by>')
   })
 })
 
 describe('journalBody', () => {
   it('a parsed JSON value of any shape is masked, a top-level array too', () => {
     expect(journalBody([{ auth: { access_token: 'secret' } }], '')).toEqual([{ auth: { access_token: '<string:6>' } }])
+  })
+
+  it('broken JSON or multipart is not kept: its text could hold auth in a shape we do not parse', () => {
+    expect(journalBody(undefined, '{"auth":{"access_token":"secret"},"prompt":"x')).toEqual({ '[raw not kept]': '45 bytes' })
+    expect(journalBody(undefined, '--b\r\nContent-Disposition: form-data; name="auth"\r\n\r\nsecret')).toHaveProperty('[raw not kept]')
+  })
+
+  it('over the body cap only the keys are kept', () => {
+    const big = { payload_role: 'x'.repeat(JOURNAL_MAX_BODY_BYTES), auth: { access_token: 'secret' } }
+    expect(journalBody(big, JSON.stringify(big))).toEqual({ '[too big]': expect.stringContaining('bytes'), 'keys': ['payload_role', 'auth'] })
+  })
+
+  it('form names: case and tokens outside auth are masked too', () => {
+    expect(journalBody(undefined, 'Auth[member_id]=secret1&access_token=secret2&max_tokens=10')).toBe('Auth[member_id]=<masked:7>&access_token=<masked:7>&max_tokens=10')
   })
 
   it('a form-encoded body keeps its text, auth and callback values masked', () => {
@@ -132,6 +156,41 @@ describe('journal storage', () => {
     expect(s.scenarios.sort()).toEqual(['chat', 'tasks'])
   })
 
+  it('concurrent adds of one portal lose no index line (the journal lock)', async () => {
+    const kv = memoryKv()
+    const set = kv.setItem
+    kv.setItem = async (k, v) => {
+      await new Promise(r => setTimeout(r, Math.random() * 5))
+      return set(k, v)
+    }
+    await Promise.all(Array.from({ length: 8 }, (_, n) => addJournalEntry(kv, MEMBER, entry(`id${n}`))))
+    expect((await journalSummary(kv, MEMBER)).entries).toBe(8)
+  })
+
+  it('member_id case does not matter (spy.ts keys by lowercase)', async () => {
+    const kv = memoryKv()
+    await addJournalEntry(kv, MEMBER.toUpperCase(), entry('a'))
+    expect((await exportJournal(kv, MEMBER)).map(e => e.id)).toEqual(['a'])
+  })
+
+  it('a damaged index line is dropped, not summed as NaN; a missing record is skipped', async () => {
+    const kv = memoryKv()
+    await addJournalEntry(kv, MEMBER, entry('a'))
+    const index = kv.data.get(`spyjindex:${MEMBER}`) as unknown[]
+    kv.data.set(`spyjindex:${MEMBER}`, [...index, { id: 'junk' }, { id: 'gone', at: 't', scenario: '', category: 'text', bytes: 5 }, null])
+    const s = await journalSummary(kv, MEMBER)
+    expect(Number.isFinite(s.bytes)).toBe(true)
+    expect(s.entries).toBe(2)
+    expect((await exportJournal(kv, MEMBER)).map(e => e.id)).toEqual(['a'])
+  })
+
+  it('the real limits rotate by count', async () => {
+    const kv = memoryKv()
+    for (let n = 0; n < 502; n++) await addJournalEntry(kv, MEMBER, entry(`r${n}`))
+    expect((await journalSummary(kv, MEMBER)).entries).toBe(500)
+    expect(await getJournalEntry(kv, MEMBER, 'r0')).toBeNull()
+  })
+
   it('an id outside the index is not read (no reading arbitrary keys)', async () => {
     const kv = memoryKv()
     kv.data.set(`spyjrec:${MEMBER}:planted`, entry('planted'))
@@ -169,6 +228,27 @@ describe('journal storage', () => {
   })
 })
 
+describe('request parsers of /api/spy and /api/spy/journal', () => {
+  it('journal: id → one record; otherwise all, narrowed by a valid label', () => {
+    expect(parseJournalQuery({ id: 'abc' })).toEqual({ kind: 'one', id: 'abc' })
+    expect(parseJournalQuery({})).toEqual({ kind: 'all', scenario: '' })
+    expect(parseJournalQuery({ scenario: 'Chat' })).toEqual({ kind: 'all', scenario: 'chat' })
+    expect(parseJournalQuery({ scenario: '../x' })).toMatchObject({ kind: 'bad' })
+    expect(parseJournalQuery({ id: '' })).toEqual({ kind: 'all', scenario: '' })
+  })
+
+  it('post: clear, clearJournal, scenario, mode — in this order; a bad label is refused', () => {
+    expect(parseSpyPost({ clear: true, clearJournal: true })).toEqual({ kind: 'clear' })
+    expect(parseSpyPost({ clearJournal: true, scenario: 'x' })).toEqual({ kind: 'clearJournal' })
+    expect(parseSpyPost({ scenario: 'chat', mode: 'echo' })).toEqual({ kind: 'scenario', scenario: 'chat' })
+    expect(parseSpyPost({ scenario: '' })).toEqual({ kind: 'scenario', scenario: '' })
+    expect(parseSpyPost({ scenario: 'чат' })).toMatchObject({ kind: 'bad' })
+    expect(parseSpyPost({ mode: 'echo' })).toEqual({ kind: 'mode', mode: 'echo' })
+    expect(parseSpyPost(null)).toEqual({ kind: 'mode', mode: undefined })
+    expect(parseSpyPost({ clear: 'yes' })).toEqual({ kind: 'mode', mode: undefined })
+  })
+})
+
 describe('handleEngineRequest with the journal', () => {
   const body = () => JSON.stringify({
     prompt: 'Что будет?',
@@ -195,7 +275,7 @@ describe('handleEngineRequest with the journal', () => {
     const [capture] = await listCaptures(kv, MEMBER)
     expect(capture).toMatchObject({ scenario: 'chat.deal-stage', journalId: capture!.id })
     const [rec] = await exportJournal(kv, MEMBER)
-    expect(rec).toMatchObject({ id: capture!.id, scenario: 'chat.deal-stage', category: 'text', callback: { target: 'errorCallbackUrl', status: 200 } })
+    expect(rec).toMatchObject({ id: capture!.id, scenario: 'chat.deal-stage', category: 'text', size: Buffer.byteLength(body()), callback: { target: 'errorCallbackUrl', status: 200 } })
     expect((rec!.body as Record<string, unknown>).payload_role).toBe(LONG)
     expect(JSON.stringify(rec)).not.toMatch(/secret/)
     const line = log.mock.calls[0]![0] as string
@@ -203,11 +283,23 @@ describe('handleEngineRequest with the journal', () => {
     expect(line).not.toContain('BitrixGPT')
   })
 
+  it('a slow journal write does not hold back the 202 (Bitrix24 waits at most 5 s)', async () => {
+    const { kv, d } = deps({ B24_SPY_FULL: '1' })
+    const set = kv.setItem
+    // Slow, not hung: the journal lock is per portal and module-wide, a hung write would block later tests.
+    kv.setItem = async (k, v) => k.startsWith('spyjrec:') ? new Promise<void>(r => setTimeout(() => void set(k, v).then(r), 800)) : set(k, v)
+    const v = await Promise.race([
+      handleEngineRequest(seg(), 'text', body(), 'application/json', d),
+      new Promise(r => setTimeout(() => r('timeout'), 300))
+    ])
+    expect(v).toMatchObject({ status: 202 })
+  })
+
   it('full mode, form body: answered 400, journal keeps the text with secrets masked', async () => {
     const { kv, d } = deps({ B24_SPY_FULL: '1' })
     const v = await handleEngineRequest(seg(), 'audio', 'prompt=x&auth[access_token]=tok-secret', 'application/x-www-form-urlencoded', d)
     expect(v.status).toBe(400)
-    await vi.waitFor(async () => expect(await exportJournal(kv, MEMBER)).toHaveLength(1))
+    await vi.waitFor(async () => expect(await exportJournal(kv, MEMBER)).toHaveLength(1), { timeout: 3000 })
     const [rec] = await exportJournal(kv, MEMBER)
     expect(rec!.body).toBe('prompt=x&auth[access_token]=<masked:10>')
   })

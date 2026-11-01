@@ -7,7 +7,8 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
 import { isAllowedPortalHost, parseSelfHostedHosts } from './b24Host'
 import { withKeyLock } from './keyLock'
-import { addJournalEntry, clearJournalData, getScenario, journalBody, maskUrl, setJournalCallback, spyFullEnabled } from './spyJournal'
+import { addJournalEntry, clearJournalData, getScenario, journalBody, setJournalCallback, spyFullEnabled } from './spyJournal'
+import { maskByKey } from './spyMask'
 import type { KeyValue } from './tokenStore'
 
 /** Categories accepted by `ai.engine.register` (docs; `vision` confirmed on the test portal). */
@@ -60,9 +61,9 @@ const MAX_KEYS = 100
  * up storage.
  */
 export function sanitizeForCapture(value: unknown, depth = 0, key = ''): unknown {
-  // Callback URLs carry portal tokens: only the host is kept (finding of /code-review).
-  if (key === 'callbackUrl' || key === 'errorCallbackUrl') return maskUrl(value)
-  if (key === 'auth' && value !== null && value !== undefined) return maskAuth(value)
+  // Credentials and callback URLs (portal tokens in the query): shape or host only (spyMask.ts).
+  const masked = key ? maskByKey(key, value, MAX_DEPTH, MAX_KEYS, depth) : undefined
+  if (masked !== undefined) return masked
   if (typeof value === 'string') {
     return value.length > CAPTURE_STRING_LIMIT ? `${value.slice(0, CAPTURE_STRING_LIMIT)}… [${value.length} chars]` : value
   }
@@ -135,18 +136,6 @@ export async function engineGate(segment: string, category: string, method: stri
   return { ok: true, answer: 'read-body', memberId }
 }
 
-/** `auth` shape without secrets: every leaf becomes `<type:length>`, keys stay visible. */
-function maskAuth(value: unknown, depth = 0): unknown {
-  if (value === null || value === undefined) return value
-  if (typeof value === 'string') return `<string:${value.length}>`
-  if (typeof value !== 'object') return `<${typeof value}>`
-  if (depth >= MAX_DEPTH) return '[depth limit]'
-  if (Array.isArray(value)) return value.slice(0, MAX_KEYS).map(v => maskAuth(v, depth + 1))
-  const out: Record<string, unknown> = {}
-  for (const [k, v] of Object.entries(value as Record<string, unknown>).slice(0, MAX_KEYS)) out[k] = maskAuth(v, depth + 1)
-  return out
-}
-
 /** How the spy answers after 202: report an error (default) or send a fixed test answer. */
 export type SpyMode = 'error' | 'echo'
 export const isSpyMode = (v: unknown): v is SpyMode => v === 'error' || v === 'echo'
@@ -200,8 +189,11 @@ export interface Capture {
   scenario?: string
   /** Id of the full-text record (only with B24_SPY_FULL=1, spyJournal.ts). */
   journalId?: string
-  callback: { target: 'errorCallbackUrl' | 'callbackUrl' | 'none', host?: string, samePortal?: boolean, status?: number, error?: string }
+  callback: CallbackOutcome
 }
+
+/** How the callback went — the same shape in the capture list and the journal. */
+export interface CallbackOutcome { target: 'errorCallbackUrl' | 'callbackUrl' | 'none', host?: string, samePortal?: boolean, status?: number, error?: string }
 
 const capturesKey = (memberId: string) => `spy:${memberId.toLowerCase()}`
 const modeKey = (memberId: string) => `spymode:${memberId.toLowerCase()}`
@@ -291,7 +283,7 @@ export async function handleEngineRequest(segment: string, category: string, raw
   }
   const body = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null
   const scenario = await getScenario(deps.kv, memberId)
-  const full = spyFullEnabled(true, deps.env)
+  const full = spyFullEnabled(deps.env)
   const capture: Capture = {
     id: randomUUID(),
     at: (deps.now?.() ?? new Date()).toISOString(),

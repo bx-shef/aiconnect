@@ -15,7 +15,7 @@ export default defineEventHandler(async (event) => {
   const siteUrl = useRuntimeConfig().public.siteUrl || getRequestURL(event).origin
   const segment = portalSegment(user.portal.memberId, loadEncKey())
   const kv = portalStore()
-  const full = spyFullEnabled(true)
+  const full = spyFullEnabled()
   return {
     enabled: true,
     full,
