@@ -1,6 +1,6 @@
 # Развернуть и подключить к порталу
 
-> Last reviewed: 2026-10-21
+> Last reviewed: 2026-11-01
 
 ## Как устроен выкат
 
@@ -107,7 +107,17 @@ make doctor           # всё разом: контейнер, настройк�
 - Watchtower запущен; диск с каталогом данных docker (`docker info`) занят меньше чем на 90 %.
 
 https он проверяет с самого сервера; если сервер не видит себя по внешнему адресу, проверьте с
-другого компьютера: `curl -s https://aiconnect.bx-shef.by/api/health`.
+другого компьютера: `curl -s https://aiconnect.bx-shef.by/api/health`. Так бывает за NAT: на
+нашем сервере DNS указывает на входящий адрес, а исходящий другой — `make doctor` показывает
+два ✗ (https по таймауту и «сертификат не прочитан»), хотя снаружи всё отвечает (2026-11-01).
+
+**Сертификат не выпускается, в журнале acme-companion нет нашего домена** —
+`docker logs <контейнер acme-companion> 2>&1 | tail`. Строка `could not get a nginx-proxy
+container ID` значит, что companion потерял прокси (например, прокси пересоздали без метки
+`com.github.nginx-proxy.nginx`) и не выпускает и не продлевает сертификаты никому на сервере.
+Чинится в compose общего прокси: у сервиса acme-companion — `environment:
+NGINX_PROXY_CONTAINER: <имя контейнера прокси>`, затем пересоздать только его
+(`docker compose … up -d --no-deps <сервис>`). Перезапуск без этой правки не помогает.
 
 **Keepalive к прокси выключен** меткой `com.github.nginx-proxy.nginx-proxy.keepalive=disabled`.
 По умолчанию nginx-proxy держит соединения с приложением открытыми до 60 секунд, а Node закрывает
