@@ -135,10 +135,18 @@ describe('установка (ONAPPINSTALL)', () => {
   it('свой токен для домена (envTokenFor): общий B24_APPLICATION_TOKEN к своему приложению шпиона не относится', async () => {
     const envTokenFor = vi.fn((domain: string) => domain === 'demo.bitrix24.ru' ? '' : 'expected')
     const d = deps({ envToken: 'expected', envTokenFor })
-    expect((await handleB24Event(body('ONAPPINSTALL', installAuth), d)).status).not.toBe(403)
+    expect((await handleB24Event(body('ONAPPINSTALL', installAuth), d)).status).toBe(200)
+    expect(d.kv.data.size).toBeGreaterThan(0)
     expect(envTokenFor).toHaveBeenCalledWith('demo.bitrix24.ru')
     const other = deps({ envToken: 'expected', envTokenFor: () => 'expected' })
     expect((await handleB24Event(body('ONAPPINSTALL', installAuth), other)).status).toBe(403)
+  })
+
+  it('удаление своего приложения: общий токен не действует, сверка — с сохранённым при установке', async () => {
+    const d = deps({ envToken: 'shared', envTokenFor: () => '' })
+    await saveInstall(d.kv, { memberId: 'm1', domain: 'demo.bitrix24.ru', accessToken: 'a', refreshToken: 'r', expiresIn: 3600, applicationToken: 'own-token' })
+    expect((await handleB24Event(body('ONAPPUNINSTALL', { domain: 'demo.bitrix24.ru', member_id: 'm1', application_token: 'shared' }), d)).status).toBe(403)
+    expect((await handleB24Event(body('ONAPPUNINSTALL', { domain: 'demo.bitrix24.ru', member_id: 'm1', application_token: 'own-token' }), d)).status).toBe(200)
   })
 
   it('реквизиты выбираются по домену установки из гарда и именно они идут на сверку', async () => {

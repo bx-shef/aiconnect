@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { appForPortal, oauthCredsFromEnv, ownSpyApp, spyAppsState, spyBoxApp, spyBoxState, oauthParams, restCallFrom, type SdkCallClient } from '../../server/utils/b24Client'
+import { appForPortal, oauthCredsFromEnv, envTokenFor, ownSpyApp, spyAppsHealth, spyAppsState, spyBoxApp, spyBoxState, oauthParams, restCallFrom, type SdkCallClient } from '../../server/utils/b24Client'
 
 const token = { domain: 'https://Demo.bitrix24.ru/', memberId: 'm1', accessToken: 'a', refreshToken: 'r', expiresAt: 10_000_000, applicationToken: 't' }
 
@@ -96,87 +96,98 @@ describe('spyBoxApp / appForPortal (коробка-стенд шпиона)', ()
   })
 })
 
-describe('spyAppsState / appForPortal (B24_SPY_APPS: свои приложения облачных порталов)', () => {
+describe('B24_SPY_APPS: свои приложения шпиона на облачных порталах', () => {
   const RU = 'b24-y.bitrix24.ru'
+  const BY = 'b24-x.bitrix24.by'
   const BOX = 'stand.example.by'
-  const env = (over: Record<string, string> = {}) => ({
-    B24_CLIENT_ID: 'cloud-id', B24_CLIENT_SECRET: 'cloud-secret', B24_APP_CODE: 'local.cloud',
+  const env = (over: Record<string, string> = {}): Record<string, string> => ({
+    B24_CLIENT_ID: 'cloud-id', B24_CLIENT_SECRET: 'cloud-secret', B24_APP_CODE: 'local.cloud', B24_APPLICATION_TOKEN: 'shared-token',
     B24_SPY_BOX_APP: `${BOX} box-id box-secret local.box`, B24_SELFHOSTED_HOSTS: BOX,
-    B24_SPY_PORTALS: `b24-x.bitrix24.by, ${RU}, ${BOX}`,
+    B24_SPY_PORTALS: `${BY}, ${RU}, ${BOX}`,
     B24_SPY_APPS: ` ${RU} ru-id ru-secret local.ru ; `,
     ...over
   })
+  const cloud = { creds: { clientId: 'cloud-id', clientSecret: 'cloud-secret' }, appCode: 'local.cloud' }
+  const empty = { creds: { clientId: '', clientSecret: '' }, appCode: '' }
 
-  it('строка портала — его реквизиты и код; облако по умолчанию и коробка — как было', () => {
+  it('строка портала — его реквизиты и код; облако и коробка — как было; пусто — облако', () => {
     expect(appForPortal('B24-Y.Bitrix24.RU', env())).toEqual({ creds: { clientId: 'ru-id', clientSecret: 'ru-secret' }, appCode: 'local.ru' })
-    expect(appForPortal('b24-x.bitrix24.by', env()).creds.clientId).toBe('cloud-id')
+    expect(appForPortal(BY, env())).toEqual(cloud)
     expect(appForPortal(BOX, env()).creds.clientId).toBe('box-id')
-    expect(spyAppsState(env({ B24_SPY_APPS: '' }))).toEqual({ apps: [], invalid: [] })
-    expect(appForPortal(RU, env({ B24_SPY_APPS: '' })).creds.clientId).toBe('cloud-id')
+    expect(spyAppsState(env({ B24_SPY_APPS: '' }))).toEqual({ apps: [], invalid: [], ignored: [] })
+    expect(appForPortal(RU, env({ B24_SPY_APPS: '' }))).toEqual(cloud)
   })
 
-  it('несколько строк через «;»', () => {
-    const st = spyAppsState(env({ B24_SPY_APPS: `${RU} ru-id ru-secret local.ru;b24-x.bitrix24.by by-id by-secret local.by` }))
-    expect(st.apps.map(a => a.host)).toEqual([RU, 'b24-x.bitrix24.by'])
-    expect(st.invalid).toEqual([])
+  it('несколько строк через «;», табы и двойные пробелы внутри строки', () => {
+    const st = spyAppsState(env({ B24_SPY_APPS: `${RU}\tru-id  ru-secret local.ru;;${BY} by-id by-secret local.by` }))
+    expect(st.apps.map(a => [a.host, a.creds.clientId])).toEqual([[RU, 'ru-id'], [BY, 'by-id']])
+    expect([st.invalid, st.ignored]).toEqual([[], []])
   })
 
-  it('хоста нет в B24_SPY_PORTALS или строка кривая — для хоста пустые реквизиты, ошибка без значений', () => {
-    for (const over of [{ B24_SPY_PORTALS: 'b24-x.bitrix24.by' }, { B24_SPY_APPS: `${RU} ru-id ru-secret` }, { B24_SPY_APPS: `${RU} ru-id ru-secret local.ru extra` }] as Array<Record<string, string>>) {
-      const st = spyAppsState(env(over))
-      expect(st.apps).toEqual([])
-      expect(st.invalid[0]?.host).toBe(RU)
+  it('кривая строка нашего портала — хост заблокирован (503), причина точная, без значений', () => {
+    const cases: Array<[string, string]> = [[`${RU} ru-id ru-secret`, 'expected 4 fields, got 3'], [`${RU} ru-id ru-secret local.ru extra`, 'expected 4 fields, got 5']]
+    for (const [line, reason] of cases) {
+      const st = spyAppsState(env({ B24_SPY_APPS: line }))
+      expect(st).toEqual({ apps: [], invalid: [{ host: RU, reason }], ignored: [] })
       expect(JSON.stringify(st)).not.toMatch(/secret|ru-id/)
-      expect(appForPortal(RU, env(over))).toEqual({ creds: { clientId: '', clientSecret: '' }, appCode: '' })
+      expect(appForPortal(RU, env({ B24_SPY_APPS: line }))).toEqual(empty)
     }
-    expect(appForPortal('b24-x.bitrix24.by', env({ B24_SPY_APPS: `${RU} ru-id` })).creds.clientId).toBe('cloud-id')
+    expect(appForPortal(BY, env({ B24_SPY_APPS: `${RU} ru-id` }))).toEqual(cloud)
   })
 
-  it('один хост дважды — не действует ни одна строка', () => {
-    const twice = env({ B24_SPY_APPS: `${RU} a-id a-secret local.a;${RU} b-id b-secret local.b` })
-    expect(spyAppsState(twice)).toEqual({ apps: [], invalid: [{ host: RU, reason: 'host listed twice' }] })
-    expect(appForPortal(RU, twice).creds.clientId).toBe('')
-  })
-})
-
-describe('B24_SPY_APPS: дубли, коробка, отчёт без значений, ownSpyApp', () => {
-  const RU = 'b24-y.bitrix24.ru'
-  const BOX = 'stand.example.by'
-  const env = (over: Record<string, string> = {}) => ({
-    B24_CLIENT_ID: 'cloud-id', B24_CLIENT_SECRET: 'cloud-secret', B24_APP_CODE: 'local.cloud',
-    B24_SPY_BOX_APP: `${BOX} box-id box-secret local.box`, B24_SELFHOSTED_HOSTS: BOX,
-    B24_SPY_PORTALS: `b24-x.bitrix24.by, ${RU}, ${BOX}`,
-    B24_SPY_APPS: `${RU} ru-id ru-secret local.ru`,
-    ...over
+  it('хост не из B24_SPY_PORTALS — строка без влияния: портал на облачных реквизитах и общем токене', () => {
+    const e = env({ B24_SPY_APPS: 'client.bitrix24.ru c-id c-secret local.c' })
+    expect(spyAppsState(e)).toEqual({ apps: [], invalid: [], ignored: [{ host: 'client.bitrix24.ru', reason: 'host not in B24_SPY_PORTALS' }] })
+    expect(appForPortal('client.bitrix24.ru', e)).toEqual(cloud)
+    expect(ownSpyApp('client.bitrix24.ru', e)).toBe(false)
+    expect(envTokenFor('client.bitrix24.ru', e)).toBe('shared-token')
   })
 
-  it('хост дважды, одна строка кривая — не действует ни одна', () => {
-    const e = env({ B24_SPY_APPS: `${RU} a-id a-secret local.a;${RU} b-id b-secret` })
-    expect(spyAppsState(e).apps).toEqual([])
-    expect(spyAppsState(e).invalid.map(i => i.reason)).toContain('host listed twice')
-    expect(appForPortal(RU, e).creds.clientId).toBe('')
-  })
-
-  it('хост коробки в B24_SPY_APPS — строка не действует, коробка — как была', () => {
+  it('хост коробки в B24_SPY_APPS — строка без влияния, коробка работает', () => {
     const e = env({ B24_SPY_APPS: `${BOX} x-id x-secret local.x` })
-    expect(spyAppsState(e).invalid).toEqual([{ host: BOX, reason: 'host is the spy box (B24_SPY_BOX_APP)' }])
-    expect(appForPortal(BOX, e).creds.clientId).toBe('')
+    expect(spyAppsState(e).ignored).toEqual([{ host: BOX, reason: 'host is the spy box (B24_SPY_BOX_APP)' }])
+    expect(appForPortal(BOX, e).creds.clientId).toBe('box-id')
+    const badBox = env({ B24_SPY_BOX_APP: `${BOX} box-id box-secret`, B24_SPY_APPS: `${BOX} x-id x-secret local.x` })
+    expect(spyAppsState(badBox).ignored[0]?.reason).toBe('host is the spy box (B24_SPY_BOX_APP)')
+    expect(ownSpyApp(BOX, badBox)).toBe(true)
+    expect(appForPortal(BOX, badBox)).toEqual(empty)
   })
 
-  it('сдвинутое поле без точки (секрет) в отчёт не попадает', () => {
-    const st = spyAppsState(env({ B24_SPY_APPS: `${RU} ru-id;S3cretValue local.ru` }))
-    expect(JSON.stringify(st)).not.toMatch(/S3cretValue|s3cretvalue/)
+  it('хост дважды (и одна строка кривая) — одна запись «listed twice», ни одна строка не действует', () => {
+    for (const v of [`${RU} a-id a-secret local.a;${RU} b-id b-secret local.b`, `${RU} a-id a-secret local.a;${RU} b-id b-secret`, `${RU} a;${RU} b`]) {
+      const st = spyAppsState(env({ B24_SPY_APPS: v }))
+      expect(st).toEqual({ apps: [], invalid: [{ host: RU, reason: 'host listed twice' }], ignored: [] })
+      expect(appForPortal(RU, env({ B24_SPY_APPS: v }))).toEqual(empty)
+    }
   })
 
-  it('регистр и схема в самой строке приводятся', () => {
-    expect(spyAppsState(env({ B24_SPY_APPS: `https://B24-Y.Bitrix24.RU ru-id ru-secret local.ru` })).apps[0]?.host).toBe(RU)
+  it('поле без точки (сдвинутый секрет, client_id без хоста) — в отчёт не попадает, хост не блокирует', () => {
+    const e = env({ B24_SPY_APPS: `${RU} ru-id;S3cretValue local.ru;S3cret2 a b c` })
+    const st = spyAppsState(e)
+    expect(JSON.stringify(st)).not.toMatch(/S3cret/i)
+    expect(st.ignored).toEqual([{ host: '', reason: 'expected 4 fields, got 2' }, { host: '', reason: 'host is not a hostname' }])
+    expect(st.invalid).toEqual([{ host: RU, reason: 'expected 4 fields, got 2' }])
+    expect(appForPortal('', e)).toEqual(cloud)
   })
 
-  it('ownSpyApp: свои приложения (и с ошибкой) — да, облако по умолчанию — нет', () => {
-    expect(ownSpyApp(RU, env())).toBe(true)
-    expect(ownSpyApp(BOX, env())).toBe(true)
-    expect(ownSpyApp(RU, env({ B24_SPY_APPS: `${RU} ru-id` }))).toBe(true)
-    expect(ownSpyApp('b24-x.bitrix24.by', env())).toBe(false)
-    expect(ownSpyApp('', env())).toBe(false)
+  it('регистр и схема — и в строке, и в домене запроса', () => {
+    const e = env({ B24_SPY_APPS: 'https://B24-Y.Bitrix24.RU ru-id ru-secret local.ru', B24_SPY_PORTALS: 'B24-Y.BITRIX24.RU' })
+    expect(spyAppsState(e).apps[0]?.host).toBe(RU)
+    expect(ownSpyApp('https://B24-Y.Bitrix24.RU', e)).toBe(true)
+  })
+
+  it('envTokenFor: свои приложения (и с ошибкой) — без общего токена; облако — общий', () => {
+    expect(envTokenFor(RU, env())).toBe('')
+    expect(envTokenFor(BOX, env())).toBe('')
+    expect(envTokenFor(RU, env({ B24_SPY_APPS: `${RU} ru-id` }))).toBe('')
+    expect(envTokenFor(BY, env())).toBe('shared-token')
+    expect(envTokenFor('', env())).toBe('shared-token')
+    expect(envTokenFor(BY, env({ B24_APPLICATION_TOKEN: '' }))).toBe('')
+  })
+
+  it('health: счётчики без хостов и значений', () => {
+    const e = env({ B24_SPY_APPS: `${RU} ru-id ru-secret local.ru;${BY} by-id;client.bitrix24.ru c d e` })
+    expect(spyAppsHealth(e)).toEqual({ on: 1, invalid: 1, ignored: 1 })
+    expect(JSON.stringify(spyAppsHealth(e))).not.toMatch(/bitrix24|secret|-id/)
   })
 })

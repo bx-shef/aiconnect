@@ -1,6 +1,6 @@
 // GET /api/health — жив ли сервер и сконфигурирован ли он. Без секретов: только флаги «задано / нет».
 
-import { spyAppsState, spyBoxState } from '../utils/b24Client'
+import { spyAppsHealth, spyBoxState } from '../utils/b24Client'
 import { buildCommit } from '../utils/buildInfo'
 import { forwardedStatus } from '../utils/requestLimits'
 
@@ -17,8 +17,8 @@ export default defineEventHandler(event => ({
     trustProxy: process.env.TRUST_PROXY === '1',
     // Коробка-стенд шпиона (B24_SPY_BOX_APP): off / on / invalid — без значений.
     spyBox: spyBoxState().state,
-    // Свои приложения шпиона (B24_SPY_APPS): сколько действует и сколько строк с ошибкой — без хостов и значений.
-    spyApps: (({ apps, invalid }) => ({ on: apps.length, invalid: invalid.length }))(spyAppsState())
+    // Свои приложения шпиона (B24_SPY_APPS): действуют / хосты с ошибкой (503) / строки без влияния — без хостов и значений.
+    spyApps: spyAppsHealth()
   },
   // Как сервер видит адрес ЭТОГО запроса (requestLimits.ts → forwardedStatus): запросите health
   // через свой прокси — при TRUST_PROXY=1 здесь должно быть `used`.
