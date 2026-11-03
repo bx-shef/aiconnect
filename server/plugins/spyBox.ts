@@ -9,5 +9,6 @@ export default defineNitroPlugin(() => {
   else if (s.state === 'invalid') console.error(`[spy-box] B24_SPY_BOX_APP is set but ignored for ${s.host || '?'}: ${s.reason}`)
   const apps = spyAppsState()
   for (const a of apps.apps) console.info(`[spy-apps] on for ${a.host}`)
-  for (const i of apps.invalid) console.error(`[spy-apps] B24_SPY_APPS line ignored for ${i.host || '?'}: ${i.reason}`)
+  for (const i of apps.invalid) console.error(`[spy-apps] B24_SPY_APPS: host ${i.host} blocked (503): ${i.reason}`)
+  for (const i of apps.ignored) console.warn(`[spy-apps] B24_SPY_APPS line has no effect for ${i.host || '?'}: ${i.reason}`)
 })

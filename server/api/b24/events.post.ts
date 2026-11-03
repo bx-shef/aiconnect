@@ -2,7 +2,7 @@
 // Решение принимает `handleB24Event` (server/utils/b24EventsHandler.ts, покрыт тестами); здесь —
 // только чтение тела и живые зависимости. Контракт — docs/B24_EVENTS.md.
 
-import { appForPortal, ownSpyApp } from '../../utils/b24Client'
+import { appForPortal, envTokenFor } from '../../utils/b24Client'
 import { handleB24Event } from '../../utils/b24EventsHandler'
 import { SlidingWindow } from '../../utils/rateLimit'
 import { clientIp, portalStore } from '../../utils/requestContext'
@@ -17,7 +17,7 @@ export default defineEventHandler(async (event) => {
     const result = await handleB24Event((await readRawBody(event)) || '', {
       kv: portalStore(),
       envToken: process.env.B24_APPLICATION_TOKEN?.trim() || '',
-      envTokenFor: domain => ownSpyApp(domain) ? '' : process.env.B24_APPLICATION_TOKEN?.trim() || '',
+      envTokenFor: domain => envTokenFor(domain),
       credsFor: domain => appForPortal(domain).creds,
       refresh: refreshWithCreds(globalThis.fetch as unknown as OAuthFetchFn),
       allowEvent: () => eventWindows.take([[`ev:${ipBucketKey(ip)}`, EVENTS_PER_IP]]),
