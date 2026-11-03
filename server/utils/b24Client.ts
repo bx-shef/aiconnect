@@ -165,7 +165,7 @@ export function spyAppsState(env: Record<string, string | undefined> = process.e
   const apps: SpyBoxApp[] = []
   const invalid: SpyAppsState['invalid'] = []
   const box = spyBoxState(env)
-  const boxHost = box.state === 'off' ? '' : box.host
+  const boxHost = box.state === 'on' ? box.app.host : box.state === 'invalid' ? box.host : ''
   const lineHosts: string[] = []
   for (const line of (env.B24_SPY_APPS ?? '').split(';')) {
     const parts = line.trim().split(/\s+/).filter(Boolean)
@@ -202,7 +202,7 @@ export function ownSpyApp(domain: string, env: Record<string, string | undefined
   const apps = spyAppsState(env)
   if (apps.apps.some(a => a.host === host) || apps.invalid.some(i => i.host === host)) return true
   const box = spyBoxState(env)
-  return box.state !== 'off' && box.host === host
+  return (box.state === 'on' ? box.app.host : box.state === 'invalid' ? box.host : '') === host
 }
 
 /**
