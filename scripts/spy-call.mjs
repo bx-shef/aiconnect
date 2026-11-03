@@ -28,6 +28,6 @@ async function call(method, params) {
 const lead = await call('crm.lead.add', { fields: { TITLE: `spy-${label}: Поставка насосов`, NAME: 'Ирина', LAST_NAME: 'Котова', PHONE: [{ VALUE: phone, VALUE_TYPE: 'WORK' }] } })
 const reg = await call('telephony.externalcall.register', { USER_ID: 1, PHONE_NUMBER: phone, TYPE: 2, CRM_CREATE: 0, CRM_ENTITY_TYPE: 'LEAD', CRM_ENTITY_ID: lead, SHOW: 0 })
 await call('telephony.externalcall.finish', { CALL_ID: reg.CALL_ID, USER_ID: 1, DURATION: 29, STATUS_CODE: '200' })
-const att = await call('telephony.externalcall.attachRecord', { CALL_ID: reg.CALL_ID, FILENAME: 'call-won-supply.mp3', FILE_CONTENT: readFileSync(file).toString('base64') })
+const att = await call('telephony.externalcall.attachRecord', { CALL_ID: reg.CALL_ID, FILENAME: `call-${label}-${Date.now()}.mp3`, FILE_CONTENT: readFileSync(file).toString('base64') })
 console.log(`lead ${lead}, call ${reg.CALL_ID}, file ${att.FILE_ID}`)
 console.log(`${new URL(hook).origin}/crm/lead/details/${lead}/`)
