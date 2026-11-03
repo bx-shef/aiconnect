@@ -12,7 +12,12 @@ export interface EventDeps {
   kv: KeyValue
   /** `B24_APPLICATION_TOKEN` из окружения, `''` — не задан. */
   envToken: string
-  /** Реквизиты приложения для домена установки (облачные или коробки-стенда шпиона — `appForPortal`). */
+  /**
+   * Токен для домена; нет — `envToken`. У своих приложений шпиона (`b24Client.ownSpyApp`) общий
+   * токен не действует: у каждого локального приложения свой, его задаёт первая установка.
+   */
+  envTokenFor?: (domain: string) => string
+  /** Реквизиты приложения для домена установки (облачные, своего приложения шпиона или коробки-стенда — `appForPortal`). */
   credsFor: (domain: string) => OAuthCreds
   /** Обновление refresh-токена на сервере авторизации `oauthHost` реквизитами `creds` (verifyInstallMember.rawOauthRefresh). */
   refresh: (refreshToken: string, oauthHost: string, creds: OAuthCreds) => Promise<unknown>
@@ -64,7 +69,7 @@ export async function handleB24Event(rawBody: string, deps: EventDeps): Promise<
 
   if (code === B24_EVENT_UNINSTALL) {
     const stored = await getPortal(deps.kv, auth.memberId)
-    const verdict = appTokenVerdict({ isInstall: false, incoming: auth.applicationToken, envToken: deps.envToken, storedToken: stored?.applicationToken })
+    const verdict = appTokenVerdict({ isInstall: false, incoming: auth.applicationToken, envToken: deps.envTokenFor?.(domain) ?? deps.envToken, storedToken: stored?.applicationToken })
     if (verdict !== 'accept') return { status: verdict === 'unconfigured' ? 503 : 403, body: { error: `application_token ${verdict}` } }
     // Удалили приложение — не держим о портале ничего.
     await removePortal(deps.kv, auth.memberId)
@@ -72,14 +77,14 @@ export async function handleB24Event(rawBody: string, deps: EventDeps): Promise<
     return { status: 200, body: { ok: true } }
   }
 
-  const verdict = appTokenVerdict({ isInstall: true, incoming: auth.applicationToken, envToken: deps.envToken })
+  const verdict = appTokenVerdict({ isInstall: true, incoming: auth.applicationToken, envToken: deps.envTokenFor?.(domain) ?? deps.envToken })
   if (verdict !== 'accept') return { status: 403, body: { error: `application_token ${verdict}` } }
 
   // ⚠ Fail-closed без реквизитов OAuth. Замер 2026-09-24 (docs/B24_EVENTS.md): без сверки
   // повторная «установка» с тем же member_id и ЧУЖИМИ токенами перезаписывала токены портала.
   const creds = deps.credsFor(domain)
   if (!creds.clientId || !creds.clientSecret) {
-    warn('B24_CLIENT_ID/B24_CLIENT_SECRET not set — install NOT stored')
+    warn(`app credentials not set for ${domain} (B24_CLIENT_ID/B24_CLIENT_SECRET, B24_SPY_APPS or B24_SPY_BOX_APP) — install NOT stored`)
     return { status: 503, body: { error: 'server not configured' } }
   }
   const oauthHost = resolveOAuthHost(auth.serverEndpoint)

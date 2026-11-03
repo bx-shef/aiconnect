@@ -164,23 +164,45 @@ export function spyAppsState(env: Record<string, string | undefined> = process.e
   const spy = parseSelfHostedHosts(env.B24_SPY_PORTALS)
   const apps: SpyBoxApp[] = []
   const invalid: SpyAppsState['invalid'] = []
+  const box = spyBoxState(env)
+  const boxHost = box.state === 'off' ? '' : box.host
+  const lineHosts: string[] = []
   for (const line of (env.B24_SPY_APPS ?? '').split(';')) {
     const parts = line.trim().split(/\s+/).filter(Boolean)
     if (parts.length === 0) continue
-    const host = portalHostname(parts[0] ?? '')
+    // В отчёт — только то, что похоже на домен (с точкой): сдвинутое поле с секретом в журнал не попадёт
+    const parsed = portalHostname(parts[0] ?? '')
+    const host = parsed.includes('.') ? parsed : ''
+    if (host) lineHosts.push(host)
     if (parts.length !== 4) invalid.push({ host, reason: `expected 4 fields, got ${parts.length}` })
     else if (!host) invalid.push({ host, reason: 'host is not a hostname' })
     else if (!spy.has(host)) invalid.push({ host, reason: 'host not in B24_SPY_PORTALS' })
+    else if (host === boxHost) invalid.push({ host, reason: 'host is the spy box (B24_SPY_BOX_APP)' })
     else {
       const [, clientId, clientSecret, appCode] = parts as [string, string, string, string]
       apps.push({ host, creds: { clientId, clientSecret }, appCode })
     }
   }
+  // Хост дважды — считаем по всем строкам, и по кривым тоже: какая из них верна, не угадываем
   const seen = new Set<string>()
   const dup = new Set<string>()
-  for (const h of apps.map(a => a.host)) (seen.has(h) ? dup : seen).add(h)
+  for (const h of lineHosts) (seen.has(h) ? dup : seen).add(h)
   for (const h of dup) invalid.push({ host: h, reason: 'host listed twice' })
   return { apps: apps.filter(a => !dup.has(a.host)), invalid }
+}
+
+/**
+ * У портала своё локальное приложение шпиона (`B24_SPY_APPS` или `B24_SPY_BOX_APP`, в том числе
+ * заданное с ошибкой): общий `B24_APPLICATION_TOKEN` к нему не относится — токен у каждого
+ * приложения свой, его задаёт первая установка (как у приложения из Маркета).
+ */
+export function ownSpyApp(domain: string, env: Record<string, string | undefined> = process.env): boolean {
+  const host = portalHostname(domain)
+  if (!host) return false
+  const apps = spyAppsState(env)
+  if (apps.apps.some(a => a.host === host) || apps.invalid.some(i => i.host === host)) return true
+  const box = spyBoxState(env)
+  return box.state !== 'off' && box.host === host
 }
 
 /**

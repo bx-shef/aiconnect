@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { appForPortal, oauthCredsFromEnv, spyAppsState, spyBoxApp, spyBoxState, oauthParams, restCallFrom, type SdkCallClient } from '../../server/utils/b24Client'
+import { appForPortal, oauthCredsFromEnv, ownSpyApp, spyAppsState, spyBoxApp, spyBoxState, oauthParams, restCallFrom, type SdkCallClient } from '../../server/utils/b24Client'
 
 const token = { domain: 'https://Demo.bitrix24.ru/', memberId: 'm1', accessToken: 'a', refreshToken: 'r', expiresAt: 10_000_000, applicationToken: 't' }
 
@@ -136,5 +136,47 @@ describe('spyAppsState / appForPortal (B24_SPY_APPS: свои приложени
     const twice = env({ B24_SPY_APPS: `${RU} a-id a-secret local.a;${RU} b-id b-secret local.b` })
     expect(spyAppsState(twice)).toEqual({ apps: [], invalid: [{ host: RU, reason: 'host listed twice' }] })
     expect(appForPortal(RU, twice).creds.clientId).toBe('')
+  })
+})
+
+describe('B24_SPY_APPS: дубли, коробка, отчёт без значений, ownSpyApp', () => {
+  const RU = 'b24-y.bitrix24.ru'
+  const BOX = 'stand.example.by'
+  const env = (over: Record<string, string> = {}) => ({
+    B24_CLIENT_ID: 'cloud-id', B24_CLIENT_SECRET: 'cloud-secret', B24_APP_CODE: 'local.cloud',
+    B24_SPY_BOX_APP: `${BOX} box-id box-secret local.box`, B24_SELFHOSTED_HOSTS: BOX,
+    B24_SPY_PORTALS: `b24-x.bitrix24.by, ${RU}, ${BOX}`,
+    B24_SPY_APPS: `${RU} ru-id ru-secret local.ru`,
+    ...over
+  })
+
+  it('хост дважды, одна строка кривая — не действует ни одна', () => {
+    const e = env({ B24_SPY_APPS: `${RU} a-id a-secret local.a;${RU} b-id b-secret` })
+    expect(spyAppsState(e).apps).toEqual([])
+    expect(spyAppsState(e).invalid.map(i => i.reason)).toContain('host listed twice')
+    expect(appForPortal(RU, e).creds.clientId).toBe('')
+  })
+
+  it('хост коробки в B24_SPY_APPS — строка не действует, коробка — как была', () => {
+    const e = env({ B24_SPY_APPS: `${BOX} x-id x-secret local.x` })
+    expect(spyAppsState(e).invalid).toEqual([{ host: BOX, reason: 'host is the spy box (B24_SPY_BOX_APP)' }])
+    expect(appForPortal(BOX, e).creds.clientId).toBe('')
+  })
+
+  it('сдвинутое поле без точки (секрет) в отчёт не попадает', () => {
+    const st = spyAppsState(env({ B24_SPY_APPS: `${RU} ru-id;S3cretValue local.ru` }))
+    expect(JSON.stringify(st)).not.toMatch(/S3cretValue|s3cretvalue/)
+  })
+
+  it('регистр и схема в самой строке приводятся', () => {
+    expect(spyAppsState(env({ B24_SPY_APPS: `https://B24-Y.Bitrix24.RU ru-id ru-secret local.ru` })).apps[0]?.host).toBe(RU)
+  })
+
+  it('ownSpyApp: свои приложения (и с ошибкой) — да, облако по умолчанию — нет', () => {
+    expect(ownSpyApp(RU, env())).toBe(true)
+    expect(ownSpyApp(BOX, env())).toBe(true)
+    expect(ownSpyApp(RU, env({ B24_SPY_APPS: `${RU} ru-id` }))).toBe(true)
+    expect(ownSpyApp('b24-x.bitrix24.by', env())).toBe(false)
+    expect(ownSpyApp('', env())).toBe(false)
   })
 })
