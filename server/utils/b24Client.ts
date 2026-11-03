@@ -150,14 +150,76 @@ export function spyBoxApp(env: Record<string, string | undefined> = process.env)
   return s.state === 'on' ? s.app : null
 }
 
+/** Состояние `B24_SPY_APPS`: действующие приложения и строки с ошибкой (хост и причина — без значений). */
+export interface SpyAppsState { apps: SpyBoxApp[], invalid: Array<{ host: string, reason: string }> }
+
 /**
- * Приложение для портала: коробка-стенд шпиона — её реквизиты, иначе — облачные из окружения.
+ * Свои локальные приложения шпиона на облачных порталах (`B24_SPY_APPS`): по строке на портал,
+ * строки через `;`, в строке `<хост> <client_id> <client_secret> <код приложения>` через пробел.
+ * У каждого локального приложения облака свои реквизиты (у `.by` и `.ru` разные), а сервер один.
+ * Действует, только если хост есть в `B24_SPY_PORTALS`: это наши тестовые порталы. Один хост
+ * дважды — не действует ни одна его строка (какая верна, не угадываем).
+ */
+export function spyAppsState(env: Record<string, string | undefined> = process.env): SpyAppsState {
+  const spy = parseSelfHostedHosts(env.B24_SPY_PORTALS)
+  const apps: SpyBoxApp[] = []
+  const invalid: SpyAppsState['invalid'] = []
+  const box = spyBoxState(env)
+  const boxHost = box.state === 'on' ? box.app.host : box.state === 'invalid' ? box.host : ''
+  const lineHosts: string[] = []
+  for (const line of (env.B24_SPY_APPS ?? '').split(';')) {
+    const parts = line.trim().split(/\s+/).filter(Boolean)
+    if (parts.length === 0) continue
+    // В отчёт — только то, что похоже на домен (с точкой): сдвинутое поле с секретом в журнал не попадёт
+    const parsed = portalHostname(parts[0] ?? '')
+    const host = parsed.includes('.') ? parsed : ''
+    if (host) lineHosts.push(host)
+    if (parts.length !== 4) invalid.push({ host, reason: `expected 4 fields, got ${parts.length}` })
+    else if (!host) invalid.push({ host, reason: 'host is not a hostname' })
+    else if (!spy.has(host)) invalid.push({ host, reason: 'host not in B24_SPY_PORTALS' })
+    else if (host === boxHost) invalid.push({ host, reason: 'host is the spy box (B24_SPY_BOX_APP)' })
+    else {
+      const [, clientId, clientSecret, appCode] = parts as [string, string, string, string]
+      apps.push({ host, creds: { clientId, clientSecret }, appCode })
+    }
+  }
+  // Хост дважды — считаем по всем строкам, и по кривым тоже: какая из них верна, не угадываем
+  const seen = new Set<string>()
+  const dup = new Set<string>()
+  for (const h of lineHosts) (seen.has(h) ? dup : seen).add(h)
+  for (const h of dup) invalid.push({ host: h, reason: 'host listed twice' })
+  return { apps: apps.filter(a => !dup.has(a.host)), invalid }
+}
+
+/**
+ * У портала своё локальное приложение шпиона (`B24_SPY_APPS` или `B24_SPY_BOX_APP`, в том числе
+ * заданное с ошибкой): общий `B24_APPLICATION_TOKEN` к нему не относится — токен у каждого
+ * приложения свой, его задаёт первая установка (как у приложения из Маркета).
+ */
+export function ownSpyApp(domain: string, env: Record<string, string | undefined> = process.env): boolean {
+  const host = portalHostname(domain)
+  if (!host) return false
+  const apps = spyAppsState(env)
+  if (apps.apps.some(a => a.host === host) || apps.invalid.some(i => i.host === host)) return true
+  const box = spyBoxState(env)
+  return (box.state === 'on' ? box.app.host : box.state === 'invalid' ? box.host : '') === host
+}
+
+/**
+ * Приложение для портала: своё приложение шпиона из `B24_SPY_APPS` или коробка-стенд шпиона — их
+ * реквизиты, иначе — облачные из окружения.
  * ⚠ `B24_SPY_BOX_APP` задана с ошибкой — для её хоста пустые реквизиты (установка 503, фрейм
  * 503), а не облачные: иначе облачный секрет ушёл бы на сверку чужого гранта (находка панели).
  */
 export function appForPortal(domain: string, env: Record<string, string | undefined> = process.env): PortalApp {
-  const box = spyBoxState(env)
   const host = portalHostname(domain)
+  // B24_SPY_APPS — раньше коробки и облака; строка с ошибкой для хоста — пустые реквизиты, как у коробки:
+  // облачный секрет не уходит на сверку чужого гранта
+  const spyApps = spyAppsState(env)
+  const own = spyApps.apps.find(a => a.host === host)
+  if (own) return { creds: own.creds, appCode: own.appCode }
+  if (host && spyApps.invalid.some(i => i.host === host)) return { creds: { clientId: '', clientSecret: '' }, appCode: '' }
+  const box = spyBoxState(env)
   if (box.state === 'on' && box.app.host === host) return { creds: box.app.creds, appCode: box.app.appCode }
   if (box.state === 'invalid' && box.host && box.host === host) return { creds: { clientId: '', clientSecret: '' }, appCode: '' }
   return { creds: oauthCredsFromEnv(env), appCode: env.B24_APP_CODE?.trim() || '' }

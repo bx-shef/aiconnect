@@ -132,6 +132,15 @@ describe('установка (ONAPPINSTALL)', () => {
     expect(d.kv.data.size).toBe(0)
   })
 
+  it('свой токен для домена (envTokenFor): общий B24_APPLICATION_TOKEN к своему приложению шпиона не относится', async () => {
+    const envTokenFor = vi.fn((domain: string) => domain === 'demo.bitrix24.ru' ? '' : 'expected')
+    const d = deps({ envToken: 'expected', envTokenFor })
+    expect((await handleB24Event(body('ONAPPINSTALL', installAuth), d)).status).not.toBe(403)
+    expect(envTokenFor).toHaveBeenCalledWith('demo.bitrix24.ru')
+    const other = deps({ envToken: 'expected', envTokenFor: () => 'expected' })
+    expect((await handleB24Event(body('ONAPPINSTALL', installAuth), other)).status).toBe(403)
+  })
+
   it('реквизиты выбираются по домену установки из гарда и именно они идут на сверку', async () => {
     const box = { clientId: 'box-id', clientSecret: 'box-secret' }
     const credsFor = vi.fn((domain: string) => domain === 'demo.bitrix24.ru' ? box : { clientId: 'cid', clientSecret: 'csecret' })

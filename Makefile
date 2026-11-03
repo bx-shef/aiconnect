@@ -137,7 +137,7 @@ doctor:
 	  "") fail "контейнера $(APP_CONTAINER) нет → make prod-up"; echo "[make] проблем: 1"; exit 1;; \
 	  *) fail "контейнер $(APP_CONTAINER): $$s → make logs";; \
 	esac; \
-	h=$$(docker exec $(APP_CONTAINER) node -e "const env = { oauth: 'B24_CLIENT_ID/B24_CLIENT_SECRET', tokenKey: 'B24_TOKEN_ENC_KEY', appCode: 'B24_APP_CODE' }; const compose = { siteUrl: 'NUXT_PUBLIC_SITE_URL', trustProxy: 'TRUST_PROXY' }; fetch('http://127.0.0.1:3000/api/health').then(r => r.json()).then(j => { const c = j.config || {}; const off = Object.keys(c).filter(k => c[k] !== true); const list = pick => off.filter(pick).map(k => env[k] || compose[k] || k).join(',') || '-'; console.log([String(j.commit || 'неизвестна').replace(/\s/g, ''), list(k => !(k in compose)), list(k => k in compose)].join(' ')) }).catch(() => process.exit(1))" 2>/dev/null); \
+	h=$$(docker exec $(APP_CONTAINER) node -e "const env = { oauth: 'B24_CLIENT_ID/B24_CLIENT_SECRET', tokenKey: 'B24_TOKEN_ENC_KEY', appCode: 'B24_APP_CODE' }; const compose = { siteUrl: 'NUXT_PUBLIC_SITE_URL', trustProxy: 'TRUST_PROXY' }; fetch('http://127.0.0.1:3000/api/health').then(r => r.json()).then(j => { const c = j.config || {}; const off = Object.keys(c).filter(k => c[k] === false); const list = pick => off.filter(pick).map(k => env[k] || compose[k] || k).join(',') || '-'; console.log([String(j.commit || 'неизвестна').replace(/\s/g, ''), list(k => !(k in compose)), list(k => k in compose)].join(' ')) }).catch(() => process.exit(1))" 2>/dev/null); \
 	if [ -z "$$h" ]; then fail "GET /api/health изнутри контейнера не ответил → make logs"; else \
 	  set -- $$h; \
 	  if [ "$$2" = - ] && [ "$$3" = - ]; then ok "настройки сервера заданы, сборка $$1"; fi; \
