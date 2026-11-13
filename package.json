@@ -3,8 +3,8 @@
   "type": "module",
   "private": true,
   "description": "Bitrix24 app shef.aiconnect: connect your own AI model (BYOK) to BitrixGPT via ai.engine.register",
-  "license": "MIT",
-  "author": "Igor Shevchik",
+  "license": "UNLICENSED",
+  "author": "ООО «БэИксШефБай»",
   "homepage": "https://github.com/bx-shef/aiconnect#readme",
   "repository": {
     "type": "git",
